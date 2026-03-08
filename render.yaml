@@ -1,0 +1,43 @@
+services:
+  # ─────────────────────────────────────────
+  # Python Backend Web Service
+  # ─────────────────────────────────────────
+  - type: web
+    name: nse-python-api
+    env: python
+    rootDir: backend
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0 # Render defaults to Python 3.7.10, so specify a modern version
+      - key: FRED_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: ALPHA_VANTAGE_KEY
+        sync: false
+
+  # ─────────────────────────────────────────
+  # React Frontend Static Site
+  # ─────────────────────────────────────────
+  - type: web
+    name: nse-react-frontend
+    env: node
+    rootDir: frontend
+    buildCommand: "npm install && npm run build"
+    startCommand: "npm run preview -- --host 0.0.0.0 --port $PORT"
+    # Note: For production, building the frontend as a Static Site is usually better,
+    # but running via Node (preview) allows the Vite Proxy to still work in basic cases.
+    # Alternatively, you can use `type: static` below:
+
+#  - type: static
+#    name: nse-react-frontend-static
+#    env: static
+#    rootDir: frontend
+#    buildCommand: "npm install && npm run build"
+#    staticPublishPath: dist
+#    routes:
+#      - type: rewrite
+#        source: /*
+#        destination: /index.html
