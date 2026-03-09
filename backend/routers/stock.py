@@ -8,57 +8,65 @@ router = APIRouter()
 
 @router.get("/stock/{ticker}")
 def get_stock_data(ticker: str):
-    info = get_stock_info(ticker)
-    df = get_stock_history(ticker, period="2y", interval="1d")
-    
-    if df.empty:
-        return {"ticker": ticker, "ohlcv": [], "indicators": {}, "events": [], "name": info["name"], "sector": info["sector"]}
+    try:
+        info = get_stock_info(ticker)
+        df = get_stock_history(ticker, period="2y", interval="1d")
+        
+        if df.empty:
+            return {"ticker": ticker, "ohlcv": [], "indicators": {}, "events": [], "name": info["name"], "sector": info["sector"]}
 
-    df_clean = df.dropna(subset=['Close', 'Volume']).copy()
-    if df_clean.empty:
-        return {"ticker": ticker, "ohlcv": [], "indicators": {}, "events": [], "name": info["name"], "sector": info["sector"]}
+        # Check if Close and Volume exist
+        if 'Close' not in df.columns or 'Volume' not in df.columns:
+            return {"error": f"Missing columns in df: {list(df.columns)}", "df_head": df.head().to_dict()}
 
-    df_ind = calculate_indicators(df_clean)
-    latest = df_ind.iloc[-1]
-    
-    ohlcv = []
-    for _, row in df_ind.fillna(0).iterrows():
-        try:
-            ohlcv.append({
-                "time": str(row['Date']),
-                "open": float(row['Open']),
-                "high": float(row['High']),
-                "low": float(row['Low']),
-                "close": float(row['Close']),
-                "volume": float(row['Volume'])
-            })
-        except:
-            pass
+        df_clean = df.dropna(subset=['Close', 'Volume']).copy()
+        if df_clean.empty:
+            return {"ticker": ticker, "ohlcv": [], "indicators": {}, "events": [], "name": info["name"], "sector": info["sector"]}
 
-    def safe_float(v):
-        return float(v) if pd.notna(v) and not np.isinf(v) else 0.0
+        df_ind = calculate_indicators(df_clean)
+        latest = df_ind.iloc[-1]
+        
+        ohlcv = []
+        for _, row in df_ind.fillna(0).iterrows():
+            try:
+                ohlcv.append({
+                    "time": str(row['Date']),
+                    "open": float(row['Open']),
+                    "high": float(row['High']),
+                    "low": float(row['Low']),
+                    "close": float(row['Close']),
+                    "volume": float(row['Volume'])
+                })
+            except:
+                pass
 
-    indicators_res = {
-        "ma20": safe_float(latest.get('MA20', 0)),
-        "ma50": safe_float(latest.get('MA50', 0)),
-        "ma200": safe_float(latest.get('MA200', 0)),
-        "atr14": safe_float(latest.get('ATR14', 0)),
-        "return_1d": safe_float(latest.get('return_1d', 0)),
-        "return_5d": safe_float(latest.get('return_5d', 0)),
-        "return_20d": safe_float(latest.get('return_20d', 0)),
-        "vol_ma20": safe_float(latest.get('vol_ma20', 0)),
-        "vol_spike": bool(latest.get('vol_spike', False)),
-        "momentum_score": safe_float(latest.get('momentum_score', 0)),
-        "bias": str(latest.get('bias', 'NEUTRAL'))
-    }
+        def safe_float(v):
+            return float(v) if pd.notna(v) and not np.isinf(v) else 0.0
 
-    events = [] # To do: integrate yahoo actions
+        indicators_res = {
+            "ma20": safe_float(latest.get('MA20', 0)),
+            "ma50": safe_float(latest.get('MA50', 0)),
+            "ma200": safe_float(latest.get('MA200', 0)),
+            "atr14": safe_float(latest.get('ATR14', 0)),
+            "return_1d": safe_float(latest.get('return_1d', 0)),
+            "return_5d": safe_float(latest.get('return_5d', 0)),
+            "return_20d": safe_float(latest.get('return_20d', 0)),
+            "vol_ma20": safe_float(latest.get('vol_ma20', 0)),
+            "vol_spike": bool(latest.get('vol_spike', False)),
+            "momentum_score": safe_float(latest.get('momentum_score', 0)),
+            "bias": str(latest.get('bias', 'NEUTRAL'))
+        }
 
-    return {
-        "ticker": ticker,
-        "name": info["name"],
-        "sector": info["sector"],
-        "ohlcv": ohlcv,
-        "indicators": indicators_res,
-        "events": events
-    }
+        events = [] # To do: integrate yahoo actions
+
+        return {
+            "ticker": ticker,
+            "name": info["name"],
+            "sector": info["sector"],
+            "ohlcv": ohlcv,
+            "indicators": indicators_res,
+            "events": events
+        }
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
