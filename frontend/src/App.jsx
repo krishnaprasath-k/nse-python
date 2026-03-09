@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import axios from "axios";
 import { Badge } from "./components/shared/Badge";
@@ -34,6 +34,21 @@ function MetricCard({ title, data, reverseColor = false }) {
 
 export default function App() {
   const [ticker, setTicker] = useState("SBIN.NS");
+
+  // Keep Render server awake by pinging it every 14 minutes
+  useEffect(() => {
+    const keepAlive = setInterval(
+      () => {
+        fetch(`${API_BASE}/ping`).catch(() => {});
+      },
+      14 * 60 * 1000,
+    );
+
+    // Ping immediately on load just in case
+    fetch(`${API_BASE}/ping`).catch(() => {});
+
+    return () => clearInterval(keepAlive);
+  }, []);
 
   const { data: market, isLoading: mktLoad } = useQuery({
     queryKey: ["market"],
