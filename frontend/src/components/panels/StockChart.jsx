@@ -1,8 +1,9 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createChart } from "lightweight-charts";
 
-export function StockChart({ data }) {
+export function StockChart({ data, events = [] }) {
   const chartContainerRef = useRef();
+  const [chartInstance, setChartInstance] = useState(null);
 
   useEffect(() => {
     if (!data || data.length === 0 || !chartContainerRef.current) return;
@@ -25,6 +26,7 @@ export function StockChart({ data }) {
         borderVisible: false,
       },
     });
+    setChartInstance(chart);
 
     const candlestickSeries = chart.addCandlestickSeries({
       upColor: "#26a69a",
@@ -34,18 +36,49 @@ export function StockChart({ data }) {
       wickDownColor: "#ef5350",
     });
 
-    // Sort logic just in case the OHLCV data is returned unordered, lightweight charts requires sorted by time.
     const sortedData = [...data]
       .sort((a, b) => new Date(a.time) - new Date(b.time))
       .map((item) => ({
-        time: item.time,
+        time: item.time.split(" ")[0],
         open: item.open,
         high: item.high,
         low: item.low,
         close: item.close,
+        volume: item.volume,
+        vol_spike: item.vol_spike,
       }));
 
     candlestickSeries.setData(sortedData);
+
+    if (events && events.length > 0) {
+      const markers = [];
+      const dataTimes = new Set(sortedData.map((d) => d.time));
+
+      events.forEach((evt) => {
+        // Only show marker if date is in data (lightweight charts throws error otherwise)
+        if (!dataTimes.has(evt.date)) return;
+
+        let color = "#71717a";
+        if (evt.type === "RESULT") color = "#3b82f6";
+        if (evt.type === "DIVIDEND") color = "#a855f7";
+        if (evt.type === "SPLIT") color = "#ec4899";
+        if (evt.type === "BONUS") color = "#14b8a6";
+
+        markers.push({
+          time: evt.date,
+          position: "aboveBar",
+          color: color,
+          shape: "arrowDown",
+          text: evt.type,
+        });
+      });
+      markers.sort((a, b) => new Date(a.time) - new Date(b.time));
+      try {
+        candlestickSeries.setMarkers(markers);
+      } catch (e) {
+        console.warn("Could not set markers:", e);
+      }
+    }
 
     const volumeSeries = chart.addHistogramSeries({
       priceFormat: { type: "volume" },
@@ -56,13 +89,14 @@ export function StockChart({ data }) {
       },
     });
 
-    const volumeData = sortedData.map((d, index) => {
-      const original = data.find((x) => x.time === d.time);
+    const volumeData = sortedData.map((d) => {
+      const isSpike = d.vol_spike;
       return {
         time: d.time,
-        value: original ? original.volume : 0,
-        color:
-          original && original.close > original.open
+        value: d.volume,
+        color: isSpike
+          ? "rgba(249, 115, 22, 0.8)"
+          : d.close > d.open
             ? "rgba(38, 166, 154, 0.4)"
             : "rgba(239, 83, 80, 0.4)",
       };
@@ -80,8 +114,9 @@ export function StockChart({ data }) {
     return () => {
       window.removeEventListener("resize", handleResize);
       chart.remove();
+      setChartInstance(null);
     };
-  }, [data]);
+  }, [data, events]);
 
   return <div ref={chartContainerRef} className="w-full h-full" />;
 }

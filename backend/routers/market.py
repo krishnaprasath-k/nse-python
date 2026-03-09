@@ -21,14 +21,8 @@ def get_market_data():
     nasdaq = indices.get("^IXIC", {"price": 0, "change_pct": 0})
     crude = indices.get("CL=F", {"price": 0, "change_pct": 0})
 
-    fii_net = 0
-    fii_net_positive = True
-    if isinstance(fii_dii, list) and len(fii_dii) > 0:
-        try:
-            fii_net = float(fii_dii[0].get('net', 0))
-            fii_net_positive = fii_net > 0
-        except:
-            pass
+    fii_net = fii_dii.get("fii_net", 0)
+    fii_net_positive = fii_net > 0
 
     global_risk_label, risk_score = compute_global_risk_signal(
         sp500_ret=sp500["change_pct"],

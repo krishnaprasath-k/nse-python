@@ -4,8 +4,27 @@ import axios from "axios";
 import { Badge } from "./components/shared/Badge";
 import { StockScreener } from "./components/panels/StockScreener";
 import { StockChart } from "./components/panels/StockChart";
+import { CorporateEventsTimeline } from "./components/panels/CorporateEventsTimeline";
+import { ShareButton } from "./components/shared/ShareButton";
+import { SeasonalPattern } from "./components/panels/SeasonalPattern";
+import { CorrelationPanel } from "./components/panels/CorrelationPanel";
 
 const API_BASE = "/api";
+
+function isNSEOpen() {
+  const now = new Date();
+  const ist = new Date(
+    now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
+  );
+  const day = ist.getDay();
+  const mins = ist.getHours() * 60 + ist.getMinutes();
+
+  if (day >= 1 && day <= 5) {
+    if (mins >= 555 && mins <= 930) return "OPEN";
+    if (mins >= 540 && mins < 555) return "PRE_OPEN";
+  }
+  return "CLOSED";
+}
 
 function MetricCard({ title, data, reverseColor = false }) {
   if (!data) return null;
@@ -34,6 +53,7 @@ function MetricCard({ title, data, reverseColor = false }) {
 
 export default function App() {
   const [ticker, setTicker] = useState("SBIN.NS");
+  const marketStatus = isNSEOpen();
 
   // Keep Render server awake by pinging it every 14 minutes
   useEffect(() => {
@@ -43,40 +63,44 @@ export default function App() {
       },
       14 * 60 * 1000,
     );
-
-    // Ping immediately on load just in case
     fetch(`${API_BASE}/ping`).catch(() => {});
-
     return () => clearInterval(keepAlive);
   }, []);
 
   const { data: market, isLoading: mktLoad } = useQuery({
     queryKey: ["market"],
     queryFn: async () => (await axios.get(`${API_BASE}/market`)).data,
-    staleTime: 3 * 60 * 1000, // 3 minutes fresh
-    refetchInterval: 3 * 60 * 1000, // auto-refresh every 3 min
+    staleTime: 3 * 60 * 1000,
+    refetchInterval: marketStatus === "OPEN" ? 3 * 60 * 1000 : false,
   });
 
   const { data: stock, isLoading: stkLoad } = useQuery({
     queryKey: ["stock", ticker],
     queryFn: async () => (await axios.get(`${API_BASE}/stock/${ticker}`)).data,
-    staleTime: 5 * 60 * 1000, // 5 minutes fresh
-    refetchInterval: 5 * 60 * 1000, // auto-refresh every 5 min
+    staleTime: 5 * 60 * 1000,
+    refetchInterval: marketStatus === "OPEN" ? 5 * 60 * 1000 : false,
   });
 
   const { data: trade, isLoading: trdLoad } = useQuery({
     queryKey: ["trade", ticker],
     queryFn: async () =>
       (await axios.get(`${API_BASE}/trade-signal/${ticker}`)).data,
-    staleTime: 5 * 60 * 1000, // 5 minutes fresh
-    refetchInterval: 5 * 60 * 1000, // auto-refresh every 5 min
+    staleTime: 5 * 60 * 1000,
+    refetchInterval: marketStatus === "OPEN" ? 5 * 60 * 1000 : false,
   });
 
   const { data: news } = useQuery({
     queryKey: ["news"],
     queryFn: async () => (await axios.get(`${API_BASE}/news`)).data,
-    staleTime: 5 * 60 * 1000, // 5 minutes fresh
-    refetchInterval: 5 * 60 * 1000, // auto-refresh every 5 min
+    staleTime: 5 * 60 * 1000,
+    refetchInterval: marketStatus === "OPEN" ? 5 * 60 * 1000 : false,
+  });
+
+  const { data: events } = useQuery({
+    queryKey: ["events", ticker],
+    queryFn: async () =>
+      (await axios.get(`${API_BASE}/stock/${ticker}/events`)).data,
+    staleTime: 60 * 60 * 1000,
   });
 
   return (
@@ -91,8 +115,27 @@ export default function App() {
               Real-time Professional Terminal
             </p>
           </div>
-          <div>
-            <Badge label={market ? "MARKET DATA LIVE" : "LOADING..."} />
+          <div className="text-right">
+            {marketStatus === "OPEN" && (
+              <span className="px-2 py-1 bg-green-100 text-green-800 text-xs font-bold rounded">
+                MARKET OPEN 🟢
+              </span>
+            )}
+            {marketStatus === "PRE_OPEN" && (
+              <span className="px-2 py-1 bg-yellow-100 text-yellow-800 text-xs font-bold rounded">
+                PRE-OPEN ⏳
+              </span>
+            )}
+            {marketStatus === "CLOSED" && (
+              <div className="flex flex-col items-end">
+                <span className="px-2 py-1 bg-gray-200 text-gray-800 text-xs font-bold rounded">
+                  MARKET CLOSED 🔴
+                </span>
+                <span className="text-[10px] text-gray-400 mt-1">
+                  Opens at 9:15 AM IST
+                </span>
+              </div>
+            )}
           </div>
         </header>
 
@@ -200,14 +243,17 @@ export default function App() {
                       Loading chart...
                     </div>
                   ) : (
-                    <div className="h-64 bg-[#f8fafc] border border-gray-200 rounded text-sm text-gray-400 font-semibold p-2 overflow-hidden relative">
-                      {stock?.ohlcv?.length > 0 ? (
-                        <StockChart data={stock.ohlcv} />
-                      ) : (
-                        <div className="flex h-full items-center justify-center">
-                          No chart data
-                        </div>
-                      )}
+                    <div className="flex flex-col gap-4">
+                      <div className="h-64 bg-[#f8fafc] border border-gray-200 rounded text-sm text-gray-400 font-semibold p-2 overflow-hidden relative">
+                        {stock?.ohlcv?.length > 0 ? (
+                          <StockChart data={stock.ohlcv} events={events} />
+                        ) : (
+                          <div className="flex h-full items-center justify-center">
+                            No chart data
+                          </div>
+                        )}
+                      </div>
+                      <CorporateEventsTimeline events={events} />
                     </div>
                   )}
                 </section>
@@ -299,6 +345,18 @@ export default function App() {
                             </span>
                           </div>
                         </div>
+                        <ShareButton
+                          data={{
+                            ticker,
+                            decision: trade?.decision || "WATCHLIST",
+                            entry: trade?.entry || 0,
+                            target: trade?.target || 0,
+                            stopLoss: trade?.stop_loss || 0,
+                            rrRatio: trade?.risk_reward || 0,
+                            globalRisk: market?.global_risk || "NEUTRAL",
+                            indiaBias: market?.india_bias || "NEUTRAL",
+                          }}
+                        />
                       </>
                     )}
                   </div>
@@ -368,6 +426,10 @@ export default function App() {
               </div>
             </div>
             <StockScreener />
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-8">
+              <SeasonalPattern ticker={ticker} />
+              <CorrelationPanel ticker={ticker} />
+            </div>
           </>
         )}
       </div>

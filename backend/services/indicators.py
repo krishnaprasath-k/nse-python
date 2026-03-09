@@ -23,7 +23,7 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['return_20d'] = df['Close'].pct_change(20)
 
     df['vol_ma20']   = df['Volume'].rolling(20).mean()
-    df['vol_spike']  = df['Volume'].rolling(5).max() > (1.5 * df['vol_ma20'])
+    df['vol_spike']  = df['Volume'] > (1.5 * df['vol_ma20'])
 
     df['momentum_score'] = np.sign(df['return_1d']) + np.sign(df['return_20d'])
     df['bias'] = df['momentum_score'].apply(
