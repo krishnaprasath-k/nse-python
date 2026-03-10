@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from routers import market, stock, screener, news, trade
+from routers import market, stock, screener, news, trade, seasonal, contracts, sector_rotation
 
 app = FastAPI(title="NSE Trading Dashboard API")
 
@@ -19,6 +19,9 @@ app.include_router(stock.router, prefix="/api")
 app.include_router(screener.router, prefix="/api")
 app.include_router(news.router, prefix="/api")
 app.include_router(trade.router, prefix="/api")
+app.include_router(seasonal.router, prefix="/api")
+app.include_router(contracts.router, prefix="/api")
+app.include_router(sector_rotation.router, prefix="/api")
 
 @app.get("/api/ping")
 def ping():

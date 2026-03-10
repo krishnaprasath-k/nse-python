@@ -6,8 +6,12 @@ import { StockScreener } from "./components/panels/StockScreener";
 import { StockChart } from "./components/panels/StockChart";
 import { CorporateEventsTimeline } from "./components/panels/CorporateEventsTimeline";
 import { ShareButton } from "./components/shared/ShareButton";
-import { SeasonalPattern } from "./components/panels/SeasonalPattern";
 import { CorrelationPanel } from "./components/panels/CorrelationPanel";
+import { NewsImpactChips } from "./components/shared/NewsImpactChips";
+import { ContractTracker } from "./components/panels/ContractTracker";
+import { SectorRotation } from "./components/panels/SectorRotation";
+import { SeasonalModule } from "./components/panels/SeasonalModule";
+import { FinalRankingTable } from "./components/panels/FinalRankingTable";
 
 const API_BASE = "/api";
 
@@ -220,7 +224,12 @@ export default function App() {
               </div>
             </section>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+              <SectorRotation />
+              <ContractTracker />
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
               <div className="lg:col-span-2 space-y-6">
                 <section className="bg-white border rounded p-4 shadow-sm">
                   <div className="flex justify-between items-center mb-4">
@@ -269,16 +278,27 @@ export default function App() {
                           <a
                             href={item.link}
                             target="_blank"
-                            className="font-semibold text-brand-link hover:underline text-[14px] block mb-1"
+                            className="font-bold text-brand-link hover:underline text-[14px] block mb-1"
                           >
                             {item.title}
                           </a>
-                          <p className="text-[12px] text-gray-500 bg-blue-50/50 p-2 rounded border border-blue-100/50">
-                            <span className="font-bold text-blue-800 tracking-wider text-[10px] uppercase">
-                              AI Note
-                            </span>
-                            : {item.ai_commentary}
-                          </p>
+                          {item.ai_note && (
+                            <p className="text-[12px] text-gray-500 bg-blue-50/50 p-2 rounded border border-blue-100/50 mb-2">
+                              <span className="font-bold text-blue-800 tracking-wider text-[10px] uppercase">
+                                AI Note
+                              </span>
+                              : {item.ai_note}
+                            </p>
+                          )}
+                          <div className="mt-1">
+                            <h4 className="text-[10px] font-bold text-gray-500 uppercase flex items-center gap-1">
+                              📈 Impact Analysis
+                            </h4>
+                            <NewsImpactChips
+                              impact={item.impact}
+                              onStockClick={setTicker}
+                            />
+                          </div>
                         </div>
                       ))
                     ) : news ? (
@@ -426,8 +446,10 @@ export default function App() {
               </div>
             </div>
             <StockScreener />
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-8">
-              <SeasonalPattern ticker={ticker} />
+            <SeasonalModule ticker={ticker} />
+            <FinalRankingTable />
+
+            <div className="mt-6 pb-8">
               <CorrelationPanel ticker={ticker} />
             </div>
           </>
