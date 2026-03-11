@@ -1,6 +1,7 @@
 from fastapi import APIRouter
-from services.yfinance_service import get_stock_history, get_stock_info
+from services.yfinance_service import get_stock_history, get_stock_info, _flatten_yf_download, _safe_float, download_multiple_tickers
 from services.indicators import calculate_indicators
+import yfinance as yf
 import pandas as pd
 import numpy as np
 
@@ -58,7 +59,7 @@ def get_stock_data(ticker: str):
             "bias": str(latest.get('bias', 'NEUTRAL'))
         }
 
-        events = [] # To do: integrate yahoo actions
+        events = []
 
         return {
             "ticker": ticker,
@@ -75,7 +76,6 @@ def get_stock_data(ticker: str):
 
 @router.get("/stock/{ticker}/events")
 def get_corporate_events(ticker: str):
-    import yfinance as yf
     try:
         t = yf.Ticker(ticker)
         events = []
@@ -106,7 +106,7 @@ def get_corporate_events(ticker: str):
         try:
             earnings = t.earnings_dates
             if earnings is not None:
-                for date in earnings.index[:20]:  # last 20 results
+                for date in earnings.index[:20]:
                     events.append({
                         "date":   str(date.date()),
                         "type":   "RESULT",
@@ -115,23 +115,41 @@ def get_corporate_events(ticker: str):
                     })
         except: pass
 
-        # Sort by date descending
         events.sort(key=lambda x: x["date"], reverse=True)
-        return events[:30]  # last 30 events
+        return events[:30]
     except Exception as e:
         return []
 
 @router.get("/stock/{ticker}/seasonal")
 def get_seasonal_pattern(ticker: str, years: int = 10):
-    import yfinance as yf
-    import pandas as pd
     try:
-        df = yf.download(ticker, period=f"{years}y", progress=False, auto_adjust=True)
-        if df.empty: return []
-        df = df[["Close"]].copy()
-
+        # Use Ticker.history() which returns flat columns reliably
+        t = yf.Ticker(ticker)
+        df = t.history(period=f"{years}y")
+        
+        if df.empty:
+            # Fallback: try yf.download with multi_level_index=False
+            df = yf.download(ticker, period=f"{years}y", progress=False, multi_level_index=False)
+            df = _flatten_yf_download(df, ticker)
+        
+        if df is None or df.empty:
+            return []
+        
+        # Ensure we have Close column
+        if "Close" not in df.columns:
+            return []
+        
+        # Reset index to get Date as column
+        if df.index.name and 'date' in df.index.name.lower():
+            df = df.reset_index()
+        elif 'Date' not in df.columns:
+            df = df.reset_index()
+        
+        # Use the index for resampling
+        close_series = df.set_index(df.columns[0])["Close"] if "Date" in df.columns or "Datetime" in df.columns else df["Close"]
+        
         # Monthly returns
-        monthly = df["Close"].resample("ME").agg(["first", "last"])
+        monthly = close_series.resample("ME").agg(["first", "last"])
         monthly["return"]   = (monthly["last"] - monthly["first"]) / monthly["first"] * 100
         monthly["month"]    = monthly.index.month
         monthly["month_name"] = monthly.index.strftime("%b")
@@ -143,7 +161,6 @@ def get_seasonal_pattern(ticker: str, years: int = 10):
             count       = ("return",   "count"),
         ).round(2)
 
-        # Fix month order
         month_order = ["Jan","Feb","Mar","Apr","May","Jun",
                        "Jul","Aug","Sep","Oct","Nov","Dec"]
         summary = summary.reindex([m for m in month_order if m in summary.index])
@@ -160,12 +177,13 @@ def get_seasonal_pattern(ticker: str, years: int = 10):
             })
         return result
     except Exception as e:
+        print(f"[seasonal] Error for {ticker}: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
 @router.get("/stock/{ticker}/correlation")
 def get_correlation(ticker: str, period: str = "1y"):
-    import yfinance as yf
-    import pandas as pd
     try:
         peers = {
             "Nifty 50":    "^NSEI",
@@ -179,15 +197,52 @@ def get_correlation(ticker: str, period: str = "1y"):
         }
 
         all_tickers = [ticker] + list(peers.values())
-        raw = yf.download(all_tickers, period=period, progress=False, auto_adjust=True)
-        if raw.empty or "Close" not in raw.columns: return []
         
-        closes = raw["Close"].pct_change().dropna()
-        closes.columns = [ticker] + list(peers.keys())
-
-        if ticker not in closes.columns: return []
+        # Use download with multi_level_index=False for simpler handling
+        raw = yf.download(all_tickers, period=period, progress=False)
         
-        corr = closes.corr()[ticker].drop(ticker).round(3)
+        if raw is None or raw.empty:
+            return []
+        
+        # Handle MultiIndex columns
+        if isinstance(raw.columns, pd.MultiIndex):
+            # Extract Close prices for all tickers
+            try:
+                closes = raw["Close"] if "Close" in raw.columns.get_level_values(0) else None
+                if closes is None:
+                    # Try the other level structure
+                    close_cols = [(col, lvl) for col, lvl in raw.columns if lvl == "Close" or col == "Close"]
+                    if not close_cols:
+                        return []
+                    closes = raw["Close"]
+            except Exception:
+                return []
+        else:
+            if "Close" not in raw.columns:
+                return []
+            closes = raw[["Close"]]
+        
+        if closes is None or closes.empty:
+            return []
+        
+        # Calculate percentage changes
+        pct = closes.pct_change().dropna()
+        
+        # Rename columns to friendly names
+        col_mapping = {ticker: ticker}
+        col_mapping.update({v: k for k, v in peers.items()})
+        
+        # Handle the column renaming based on structure
+        if isinstance(pct.columns, pd.MultiIndex):
+            pct.columns = pct.columns.get_level_values(-1)  # Get ticker level
+        
+        pct = pct.rename(columns=col_mapping)
+        
+        if ticker not in pct.columns:
+            # Try the mapped name
+            return []
+        
+        corr = pct.corr()[ticker].drop(ticker, errors='ignore').round(3)
 
         result = []
         for name, val in corr.items():
@@ -209,4 +264,7 @@ def get_correlation(ticker: str, period: str = "1y"):
         result.sort(key=lambda x: abs(x["correlation"]), reverse=True)
         return result
     except Exception as e:
+        print(f"[correlation] Error for {ticker}: {e}")
+        import traceback
+        traceback.print_exc()
         return []

@@ -1,6 +1,8 @@
 from fastapi import APIRouter
 import yfinance as yf
+import pandas as pd
 from cache.cache import get_cache, set_cache
+from services.yfinance_service import download_multiple_tickers, _safe_float, _fetch_nse_stock_quote
 
 router = APIRouter()
 
@@ -101,35 +103,42 @@ def get_screener():
     if cached: return cached
     
     tickers = [t["ticker"] for t in UNIVERSE_TICKERS]
+    
     try:
-        data = yf.download(tickers, period="1mo", group_by='ticker')
-        if data is None or data.empty:
-            raise ValueError("yf.download returned empty data")
-            
+        # Use the robust multi-ticker downloader with fallbacks
+        ticker_data = download_multiple_tickers(tickers, period="3mo")
+        
         res = []
         for t_info in UNIVERSE_TICKERS:
             t = t_info["ticker"]
             price = 0
             change_pct = 0
+            close_prices = []
+            
             try:
-                if t in data.columns.levels[0] if isinstance(data.columns, pd.MultiIndex) else data.columns:
-                    df = data[t]['Close']
+                df = ticker_data.get(t)
+                if df is not None and not df.empty and 'Close' in df.columns:
+                    closes = df['Close'].dropna()
+                    if len(closes) > 0:
+                        current_close = _safe_float(closes.iloc[-1])
+                        prev_close = _safe_float(closes.iloc[-2]) if len(closes) > 1 else current_close
+                        if prev_close != 0:
+                            change_pct = (current_close - prev_close) / prev_close
+                        price = current_close
+                        close_prices = [_safe_float(v) for v in closes.tolist()]
                 else:
-                    df = pd.Series(dtype=float)
-                    
-                if not df.empty:
-                    current_close = df.dropna().iloc[-1]
-                    prev_close = df.dropna().iloc[-2] if len(df.dropna()) > 1 else current_close
-                    change_pct = (current_close - prev_close) / prev_close
-                    price = current_close
-            except:
-                pass
+                    # Fallback: try NSE direct API
+                    symbol = t.replace(".NS", "")
+                    nse_data = _fetch_nse_stock_quote(symbol)
+                    if nse_data and nse_data["price"] > 0:
+                        price = nse_data["price"]
+                        change_pct = nse_data["change_pct"]
+                        close_prices = [nse_data.get("prev", price), price]
+            except Exception as e:
+                print(f"[screener] Error processing {t}: {e}")
             
-            # Using some basic mock logic for zone and scoring since it's hard to compute quickly
-            zone = "Demand" if change_pct > 0.01 else ("Breakout" if change_pct > 0.05 else "None")
+            zone = "Breakout" if change_pct > 0.05 else ("Demand" if change_pct > 0.01 else "None")
             mock_score = 3 if change_pct > 0 else 1
-            
-            close_prices = df.dropna().tolist() if not df.empty else []
             
             base_data = {
                 "ticker": t,
@@ -151,7 +160,6 @@ def get_screener():
             
             enhanced = enhanced_score(base_data, close_prices)
             
-            # Additional logic for final probability score
             scores = {
                 "macro":      2 if enhanced["global_risk"] == "RISK ON" else 0 if enhanced["global_risk"] == "RISK OFF" else 1,
                 "sector":     2 if enhanced["sector_trend"] == "RISING" else 0 if enhanced["sector_trend"] == "FALLING" else 1,
@@ -172,4 +180,6 @@ def get_screener():
         return res
     except Exception as e:
         print(f"Error in screener: {e}")
+        import traceback
+        traceback.print_exc()
         return []

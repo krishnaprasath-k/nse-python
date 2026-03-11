@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 from datetime import datetime
 from cache.cache import get_cache, set_cache
+from services.yfinance_service import _flatten_yf_download
 
 router = APIRouter()
 
@@ -14,13 +15,13 @@ def get_seasonal_analysis(ticker: str) -> dict:
 
     try:
         # ── Part 1: Monthly Win Rate (last 10 years) ──────────────────────────
-        df = yf.download(ticker, period="10y", progress=False, auto_adjust=True)
-        if df.empty:
-            return {}
-        
-        # Handle MultiIndex columns
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+        df = yf.download(ticker, period="10y", progress=False, auto_adjust=True, multi_level_index=False)
+        df = _flatten_yf_download(df, ticker)
+        if df is None or df.empty:
+            # Fallback: use Ticker.history()
+            df = yf.Ticker(ticker).history(period="10y")
+            if df is None or df.empty:
+                return {}
         
         df = df[["Close"]].copy()
         
