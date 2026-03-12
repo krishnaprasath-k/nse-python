@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import axios from "axios";
 import {
@@ -10,11 +10,42 @@ import {
   Cell,
 } from "recharts";
 
+const LIMIT = 50;
+
 export function SeasonalModule({ ticker }) {
   const { data, isLoading } = useQuery({
     queryKey: ["seasonal", ticker],
     queryFn: async () => (await axios.get(`/api/seasonal/${ticker}`)).data,
     staleTime: 60 * 60 * 1000,
+  });
+
+  // Universe performance state
+  const [univPage, setUnivPage] = useState(1);
+  const [univFilter, setUnivFilter] = useState("all");
+  const [univSort, setUnivSort] = useState("return");
+  const [univOrder, setUnivOrder] = useState("desc");
+  const [univSearch, setUnivSearch] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const searchTimer = useRef(null);
+
+  const { data: prevYear } = useQuery({
+    queryKey: ["seasonal_prev_year", univPage, univFilter, univSearch, univSort, univOrder],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        page: univPage,
+        limit: LIMIT,
+        filter: univFilter,
+        search: univSearch,
+        sort: univSort,
+        order: univOrder,
+      });
+      return (await axios.get(`/api/seasonal/market/previous-year?${params}`)).data;
+    },
+    staleTime: 5 * 60 * 1000,
+    refetchInterval: (query) => {
+      const d = query.state.data;
+      return d?.status === "building" ? 5000 : false;
+    },
   });
 
   if (isLoading)
@@ -41,22 +72,59 @@ export function SeasonalModule({ ticker }) {
     return "bg-gray-100 text-gray-800 border-gray-300";
   };
 
+  const handleSearchChange = (e) => {
+    const val = e.target.value;
+    setSearchInput(val);
+    clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      setUnivSearch(val);
+      setUnivPage(1);
+    }, 400);
+  };
+
+  // Pagination helpers
+  const renderPageButtons = () => {
+    if (!prevYear || prevYear.total_pages <= 1) return null;
+    const total = prevYear.total_pages;
+    const cur = prevYear.page;
+    const start = Math.max(1, cur - 2);
+    const end = Math.min(total, start + 4);
+    const pages = [];
+    for (let p = start; p <= end; p++) pages.push(p);
+    return pages.map((p) => (
+      <button
+        key={p}
+        onClick={() => setUnivPage(p)}
+        className={`px-2 py-1 border rounded text-[11px] ${
+          p === cur ? "bg-blue-500 text-white border-blue-500" : "bg-white hover:bg-gray-50"
+        }`}
+      >
+        {p}
+      </button>
+    ));
+  };
+
   return (
     <section className="col-span-1 lg:col-span-2 bg-white border rounded p-4 shadow-sm mt-6">
       <div className="flex justify-between items-center mb-4 border-b pb-2">
         <h2 className="text-[16px] font-bold text-brand-primary">
-          📅 Seasonal Impact Analysis — Last 10 Years
+          Seasonal Impact Analysis — Last 10 Years
         </h2>
         {currentMonthData && (
           <span
-            className={`text-[12px] font-bold px-2 py-1 rounded-full ${currentMonthData.signal === "RISING" ? "bg-green-100 text-green-800" : currentMonthData.signal === "FALLING" ? "bg-red-100 text-red-800" : "bg-yellow-100 text-yellow-800"}`}
+            className={`inline-flex items-center gap-1.5 text-[12px] font-bold px-2 py-1 rounded border ${
+              currentMonthData.signal === "RISING"
+                ? "bg-green-50 text-green-800 border-green-300"
+                : currentMonthData.signal === "FALLING"
+                  ? "bg-red-50 text-red-800 border-red-300"
+                  : "bg-amber-50 text-amber-800 border-amber-300"
+            }`}
           >
-            {currentMonthData.month.toUpperCase()} → {currentMonthData.signal}{" "}
-            {currentMonthData.signal === "RISING"
-              ? "🟢"
-              : currentMonthData.signal === "FALLING"
-                ? "🔴"
-                : "🟡"}
+            <span className={`w-2 h-2 rounded-full inline-block ${
+              currentMonthData.signal === "RISING" ? "bg-green-500" :
+              currentMonthData.signal === "FALLING" ? "bg-red-500" : "bg-amber-400"
+            }`} />
+            {currentMonthData.month.toUpperCase()} — {currentMonthData.signal}
           </span>
         )}
       </div>
@@ -79,11 +147,9 @@ export function SeasonalModule({ ticker }) {
                 />
                 <Bar dataKey="avg_return">
                   {monthly_pattern.map((entry, index) => {
-                    let fill = "#fbbf24"; // MIXED
-                    if (entry.avg_return > 0 && entry.win_rate >= 60)
-                      fill = "#16a34a"; // RISING
-                    if (entry.avg_return < 0 && entry.win_rate <= 40)
-                      fill = "#dc2626"; // FALLING
+                    let fill = "#fbbf24";
+                    if (entry.avg_return > 0 && entry.win_rate >= 60) fill = "#16a34a";
+                    if (entry.avg_return < 0 && entry.win_rate <= 40) fill = "#dc2626";
                     return (
                       <Cell
                         key={`cell-${index}`}
@@ -167,21 +233,15 @@ export function SeasonalModule({ ticker }) {
               </thead>
               <tbody>
                 {current_month_detail?.slice(0, 10).map((y, i) => (
-                  <tr
-                    key={i}
-                    className="border-b border-gray-100 last:border-0"
-                  >
+                  <tr key={i} className="border-b border-gray-100 last:border-0">
                     <td className="py-1 font-bold">{y.year}</td>
-                    <td
-                      className={`py-1 font-bold ${y.return > 0 ? "text-green-600" : "text-red-600"}`}
-                    >
-                      {y.return > 0 ? "+" : ""}
-                      {y.return}%
+                    <td className={`py-1 font-bold ${y.return > 0 ? "text-green-600" : "text-red-600"}`}>
+                      {y.return > 0 ? "+" : ""}{y.return}%
                     </td>
-                    <td
-                      className={`py-1 font-bold ${y.result === "UP" ? "text-green-600" : "text-red-600"}`}
-                    >
-                      {y.result === "UP" ? "▲" : "▼"}
+                    <td className="py-1">
+                      <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded ${y.result === "UP" ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-700 border border-red-200"}`}>
+                        {y.result}
+                      </span>
                     </td>
                   </tr>
                 ))}
@@ -200,18 +260,165 @@ export function SeasonalModule({ ticker }) {
                   className={`flex justify-between p-1 px-2 rounded border text-[11px] font-bold ${getDayColor(day.avg_return)}`}
                 >
                   <span>{day.day}</span>
-                  <span className="opacity-80 font-normal">
-                    {day.win_rate}% win
-                  </span>
+                  <span className="opacity-80 font-normal">{day.win_rate}% win</span>
                   <span>
-                    {day.avg_return > 0 ? "+" : ""}
-                    {day.avg_return}%
+                    {day.avg_return > 0 ? "+" : ""}{day.avg_return}%
                   </span>
                 </div>
               ))}
             </div>
           </div>
         </div>
+      </div>
+
+      {/* ── Universe Performance ── */}
+      <div className="mt-6 border-t pt-4">
+        {/* Building state */}
+        {(!prevYear || prevYear.status === "building") && (
+          <div>
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="text-[14px] font-bold text-brand-primary">
+                Universe Performance — Building...
+              </h3>
+              <span className="text-[11px] text-gray-500">
+                {prevYear?.progress ?? 0}% complete
+              </span>
+            </div>
+            <div className="w-full bg-gray-200 rounded h-2 mb-2">
+              <div
+                className="bg-blue-500 h-2 rounded transition-all duration-500"
+                style={{ width: `${prevYear?.progress ?? 0}%` }}
+              />
+            </div>
+            <p className="text-[11px] text-gray-400">
+              Downloading price data for all ~1800 NSE stocks in batches. This runs once per day and takes 2–3 minutes.
+            </p>
+          </div>
+        )}
+
+        {/* Ready state */}
+        {prevYear?.status === "ready" && (
+          <div>
+            {/* Header + summary */}
+            <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
+              <h3 className="text-[14px] font-bold text-brand-primary">
+                NSE Universe Performance — {prevYear.year}
+                <span className="ml-2 text-gray-400 font-normal text-[11px]">
+                  ({prevYear.total.toLocaleString()} stocks)
+                </span>
+              </h3>
+              <div className="flex gap-2 text-[11px]">
+                <span className="inline-flex items-center gap-1 bg-green-50 text-green-800 border border-green-200 px-2 py-0.5 rounded font-bold">
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
+                  {prevYear.summary.positive_count} up
+                </span>
+                <span className="inline-flex items-center gap-1 bg-red-50 text-red-800 border border-red-200 px-2 py-0.5 rounded font-bold">
+                  <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />
+                  {prevYear.summary.negative_count} down
+                </span>
+                <span className="bg-gray-100 text-gray-700 border border-gray-200 px-2 py-0.5 rounded font-bold">
+                  avg {prevYear.summary.avg_return}%
+                </span>
+              </div>
+            </div>
+
+            {/* Controls */}
+            <div className="flex gap-2 mb-3 flex-wrap">
+              <input
+                className="border rounded px-2 py-1 text-[11px] w-44"
+                placeholder="Search name or ticker..."
+                value={searchInput}
+                onChange={handleSearchChange}
+              />
+              <select
+                className="border rounded px-2 py-1 text-[11px]"
+                value={univFilter}
+                onChange={(e) => { setUnivFilter(e.target.value); setUnivPage(1); }}
+              >
+                <option value="all">All stocks</option>
+                <option value="positive">Gainers only</option>
+                <option value="negative">Losers only</option>
+              </select>
+              <select
+                className="border rounded px-2 py-1 text-[11px]"
+                value={univSort}
+                onChange={(e) => { setUnivSort(e.target.value); setUnivPage(1); }}
+              >
+                <option value="return">Sort: Return</option>
+                <option value="name">Sort: Name</option>
+                <option value="sector">Sort: Sector</option>
+              </select>
+              <button
+                className="border rounded px-2 py-1 text-[11px] bg-gray-50 hover:bg-gray-100 font-bold"
+                onClick={() => { setUnivOrder((o) => (o === "desc" ? "asc" : "desc")); setUnivPage(1); }}
+              >
+                {univOrder === "desc" ? "↓ DESC" : "↑ ASC"}
+              </button>
+            </div>
+
+            {/* Table */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-[11px] border-collapse">
+                <thead>
+                  <tr className="text-gray-500 border-b text-left bg-gray-50">
+                    <th className="py-1.5 px-2 w-8">#</th>
+                    <th className="py-1.5 px-2">Stock</th>
+                    <th className="py-1.5 px-2">Ticker</th>
+                    <th className="py-1.5 px-2">Sector</th>
+                    <th className="py-1.5 px-2 text-right">Return %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {prevYear.stocks.map((s, i) => (
+                    <tr key={s.ticker} className="border-b border-gray-100 hover:bg-gray-50">
+                      <td className="py-1 px-2 text-gray-400">
+                        {(prevYear.page - 1) * LIMIT + i + 1}
+                      </td>
+                      <td className="py-1 px-2 font-bold">{s.name}</td>
+                      <td className="py-1 px-2 text-gray-500 font-mono text-[10px]">
+                        {s.ticker.replace(".NS", "")}
+                      </td>
+                      <td className="py-1 px-2 text-gray-500">{s.sector}</td>
+                      <td
+                        className={`py-1 px-2 font-bold text-right ${
+                          s.is_positive ? "text-green-600" : "text-red-600"
+                        }`}
+                      >
+                        {s.is_positive ? "+" : ""}{s.annual_return}%
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination */}
+            {prevYear.total_pages > 1 && (
+              <div className="flex justify-between items-center mt-3 text-[11px] text-gray-600">
+                <span>
+                  Page {prevYear.page} of {prevYear.total_pages} &nbsp;·&nbsp; {prevYear.total.toLocaleString()} results
+                </span>
+                <div className="flex gap-1">
+                  <button
+                    disabled={prevYear.page <= 1}
+                    onClick={() => setUnivPage((p) => p - 1)}
+                    className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-gray-50"
+                  >
+                    ← Prev
+                  </button>
+                  {renderPageButtons()}
+                  <button
+                    disabled={prevYear.page >= prevYear.total_pages}
+                    onClick={() => setUnivPage((p) => p + 1)}
+                    className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-gray-50"
+                  >
+                    Next →
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </section>
   );

@@ -40,17 +40,19 @@ export function SectorRotation() {
   return (
     <section className="bg-white border rounded p-4 shadow-sm w-full space-y-4">
       <h2 className="text-[16px] font-bold text-brand-primary">
-        🔄 Sector Rotation — Where Is Money Flowing?
+        Sector Rotation — Money Flow
       </h2>
-      <div className="bg-gray-50 border border-gray-200 rounded p-3 text-xs">
-        <div className="font-semibold text-green-700">
-          🟢 RISING: {rising_sectors.map((s) => s.sector).join(" | ")}
+      <div className="bg-gray-50 border border-gray-200 rounded p-3 text-xs space-y-1">
+        <div className="flex items-center gap-2 font-semibold text-green-700">
+          <span className="w-2 h-2 rounded-full bg-green-500 inline-block shrink-0" />
+          <span>RISING: {rising_sectors.map((s) => s.sector).join(" · ")}</span>
         </div>
-        <div className="font-semibold text-red-700">
-          🔴 FALLING: {falling_sectors.map((s) => s.sector).join(" | ")}
+        <div className="flex items-center gap-2 font-semibold text-red-700">
+          <span className="w-2 h-2 rounded-full bg-red-500 inline-block shrink-0" />
+          <span>FALLING: {falling_sectors.map((s) => s.sector).join(" · ")}</span>
         </div>
-        <div className="font-bold text-brand-primary mt-1">
-          💡 Theme: {preferred_theme} rotation in play
+        <div className="font-bold text-brand-primary pt-0.5">
+          Theme: {preferred_theme} rotation in play
         </div>
       </div>
 
@@ -79,7 +81,7 @@ export function SectorRotation() {
               <span>1M:</span>
               <span>
                 {s.ret_1m > 0 ? "+" : ""}
-                {s.ret_1m}% {s.ret_1m > 0 ? "▲" : "▼"}
+                {s.ret_1m}%
               </span>
             </div>
             <div className="mt-1 pt-1 border-t border-black/10 text-[9px] font-extrabold uppercase tracking-wide text-center">

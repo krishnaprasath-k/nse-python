@@ -18,7 +18,7 @@ export function StockScreener() {
 
   const displayData = React.useMemo(() => {
     if (!Array.isArray(screens)) return [];
-    if (filter === "Near 21 EMA ✅") {
+    if (filter === "Near 21 EMA") {
       return screens.filter((s) => s.ema_signal === "BEST TIMING");
     }
     if (filter === "Demand Zone") {
@@ -43,7 +43,7 @@ export function StockScreener() {
           Stock Universe Screener
         </h2>
         <div className="flex gap-2">
-          {["All", "Near 21 EMA ✅", "Demand Zone", "High Score"].map((f) => (
+          {["All", "Near 21 EMA", "Demand Zone", "High Score"].map((f) => (
             <button
               key={f}
               onClick={() => setFilter(f)}
@@ -58,15 +58,16 @@ export function StockScreener() {
       {topEmaStocks.length > 0 && filter === "All" && (
         <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded">
           <h3 className="text-xs font-bold text-green-800 mb-2">
-            🎯 Best Entry Timing Right Now (Within 1% of 21 EMA)
+            Best Entry Timing — Within 1% of 21 EMA
           </h3>
           <div className="flex flex-wrap gap-2">
             {topEmaStocks.map((s) => (
               <span
                 key={s.ticker}
-                className="px-2 py-1 bg-white border border-green-300 text-green-800 text-[11px] font-bold rounded-full"
+                className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-green-300 text-green-800 text-[11px] font-bold rounded"
               >
-                {s.ticker} ✅
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
+                {s.ticker}
               </span>
             ))}
           </div>

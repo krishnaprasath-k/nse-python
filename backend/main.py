@@ -1,10 +1,27 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+import threading
 
 from routers import market, stock, screener, news, trade, seasonal, contracts, sector_rotation, config
 
-app = FastAPI(title="NSE Trading Dashboard API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Pre-warm NSE symbol list cache on startup (non-blocking)
+    def _prewarm():
+        try:
+            from services.nse_symbols import get_all_nse_symbols
+            syms = get_all_nse_symbols()
+            print(f"[startup] Symbol list ready: {len(syms)} NSE EQ symbols")
+        except Exception as e:
+            print(f"[startup] Symbol pre-warm failed: {e}")
+    threading.Thread(target=_prewarm, daemon=True).start()
+    yield
+
+
+app = FastAPI(title="NSE Trading Dashboard API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

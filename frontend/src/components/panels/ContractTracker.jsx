@@ -13,7 +13,7 @@ export function ContractTracker() {
     <section className="bg-white border rounded p-4 shadow-sm w-full">
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-[16px] font-bold text-brand-primary">
-          🏗️ Big Contract Wins (≥ ₹100 Cr)
+          Big Contract Wins (≥ ₹100 Cr)
         </h2>
       </div>
       {isLoading ? (
@@ -35,7 +35,7 @@ export function ContractTracker() {
               >
                 <div className="flex justify-between items-center">
                   <div className="font-bold text-brand-primary text-[14px]">
-                    🏗️ {c.ticker}
+                    {c.ticker}
                   </div>
                   <div className="font-bold text-[16px]">
                     {c.contract_value_display} {c.direction === "UP" ? "↑" : ""}

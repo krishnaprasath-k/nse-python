@@ -122,24 +122,27 @@ export default function App() {
               className="flex items-center gap-1 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded text-sm font-medium text-gray-700 transition-colors"
               title="Model Configuration"
             >
-              ⚙️ Config
+              Config
             </Link>
           </div>
           <div className="text-right">
             {marketStatus === "OPEN" && (
-              <span className="px-2 py-1 bg-green-100 text-green-800 text-xs font-bold rounded">
-                MARKET OPEN 🟢
+              <span className="inline-flex items-center gap-1.5 px-2 py-1 bg-green-50 text-green-800 border border-green-300 text-xs font-bold rounded">
+                <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />
+                MARKET OPEN
               </span>
             )}
             {marketStatus === "PRE_OPEN" && (
-              <span className="px-2 py-1 bg-yellow-100 text-yellow-800 text-xs font-bold rounded">
-                PRE-OPEN ⏳
+              <span className="inline-flex items-center gap-1.5 px-2 py-1 bg-amber-50 text-amber-800 border border-amber-300 text-xs font-bold rounded">
+                <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
+                PRE-OPEN
               </span>
             )}
             {marketStatus === "CLOSED" && (
               <div className="flex flex-col items-end">
-                <span className="px-2 py-1 bg-gray-200 text-gray-800 text-xs font-bold rounded">
-                  MARKET CLOSED 🔴
+                <span className="inline-flex items-center gap-1.5 px-2 py-1 bg-gray-100 text-gray-700 border border-gray-300 text-xs font-bold rounded">
+                  <span className="w-2 h-2 rounded-full bg-gray-400 inline-block" />
+                  MARKET CLOSED
                 </span>
                 <span className="text-[10px] text-gray-400 mt-1">
                   Opens at 9:15 AM IST

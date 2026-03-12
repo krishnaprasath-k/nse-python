@@ -31,7 +31,7 @@ export function FinalRankingTable() {
   return (
     <section className="bg-white border rounded p-4 shadow-sm w-full mt-6">
       <h2 className="text-[16px] font-bold text-brand-primary mb-4">
-        🏆 Final Probability Ranking
+        Final Probability Ranking
       </h2>
       <div className="overflow-x-auto text-[12px]">
         <table className="min-w-full text-left">

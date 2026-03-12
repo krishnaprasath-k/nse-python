@@ -1,11 +1,105 @@
-from fastapi import APIRouter
+import math
+from fastapi import APIRouter, Query
 import yfinance as yf
 import pandas as pd
 from datetime import datetime
 from cache.cache import get_cache, set_cache
-from services.yfinance_service import _flatten_yf_download
+from services.yfinance_service import _flatten_yf_download, _safe_float
+from services.universe_builder import (
+    get_build_state, trigger_build_if_needed,
+    ANNUAL_CACHE_KEY, ANNUAL_CACHE_TTL,
+)
 
 router = APIRouter()
+
+
+@router.get("/seasonal/market/previous-year/status")
+def get_universe_build_status() -> dict:
+    return get_build_state()
+
+
+@router.get("/seasonal/market/previous-year")
+def get_previous_year_performance(
+    year: int = Query(2025),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    sort: str = Query("return"),    # return | name | sector
+    order: str = Query("desc"),     # asc | desc
+    filter: str = Query("all"),     # all | positive | negative
+    sector: str = Query(""),
+    search: str = Query(""),
+) -> dict:
+    cache_key = ANNUAL_CACHE_KEY.format(year=year)
+    full_data = get_cache(cache_key, ANNUAL_CACHE_TTL)
+    state = get_build_state()
+
+    if full_data is None:
+        # Trigger build if not already running
+        trigger_build_if_needed(year)
+        current_state = get_build_state()
+        return {
+            "year": year,
+            "status": current_state["status"] if current_state["status"] == "building" else "building",
+            "progress": current_state["progress"],
+            "total": 0,
+            "page": page,
+            "limit": limit,
+            "total_pages": 0,
+            "stocks": [],
+            "summary": {},
+        }
+
+    # Data ready — apply filters
+    stocks = list(full_data["stocks"])
+
+    if filter == "positive":
+        stocks = [s for s in stocks if s["is_positive"]]
+    elif filter == "negative":
+        stocks = [s for s in stocks if not s["is_positive"]]
+
+    if sector:
+        stocks = [s for s in stocks if s.get("sector", "").lower() == sector.lower()]
+
+    if search:
+        q = search.lower()
+        stocks = [s for s in stocks if q in s["name"].lower() or q in s["ticker"].lower()]
+
+    # Sort
+    reverse = (order == "desc")
+    if sort == "return":
+        stocks.sort(key=lambda x: x["annual_return"], reverse=reverse)
+    elif sort == "name":
+        stocks.sort(key=lambda x: x["name"].lower(), reverse=reverse)
+    elif sort == "sector":
+        stocks.sort(key=lambda x: x.get("sector", "").lower(), reverse=reverse)
+
+    # Paginate
+    total = len(stocks)
+    total_pages = max(1, math.ceil(total / limit))
+    page = min(page, total_pages)
+    offset = (page - 1) * limit
+    page_stocks = stocks[offset: offset + limit]
+
+    # Summary over all filtered stocks
+    positives = sum(1 for s in stocks if s["is_positive"])
+    avg_return = round(sum(s["annual_return"] for s in stocks) / total, 2) if total else 0
+
+    return {
+        "year": year,
+        "status": "ready",
+        "progress": 100,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "total_pages": total_pages,
+        "stocks": page_stocks,
+        "summary": {
+            "positive_count": positives,
+            "negative_count": total - positives,
+            "avg_return": avg_return,
+        },
+    }
+
 
 @router.get("/seasonal/{ticker}")
 def get_seasonal_analysis(ticker: str) -> dict:
@@ -23,7 +117,7 @@ def get_seasonal_analysis(ticker: str) -> dict:
         falling_wr = s_cfg.get("falling_win_rate", 40)
         pre_buy_th = s_cfg.get("pre_result_buy_threshold", 65)
         pre_avoid_th = s_cfg.get("pre_result_avoid_threshold", 35)
-        
+
         # ── Part 1: Monthly Win Rate ──────────────────────────
         df = yf.download(ticker, period=f"{data_years}y", progress=False, auto_adjust=True, multi_level_index=False)
         df = _flatten_yf_download(df, ticker)
@@ -32,9 +126,9 @@ def get_seasonal_analysis(ticker: str) -> dict:
             df = yf.Ticker(ticker).history(period="10y")
             if df is None or df.empty:
                 return {}
-        
+
         df = df[["Close"]].copy()
-        
+
         # Monthly returns
         monthly = df["Close"].resample("ME").agg(["first", "last"])
         monthly["return"]     = ((monthly["last"] - monthly["first"]) / monthly["first"]) * 100
@@ -42,10 +136,10 @@ def get_seasonal_analysis(ticker: str) -> dict:
         monthly["month_name"] = monthly.index.strftime("%b")
         monthly["year"]       = monthly.index.year
         monthly["positive"]   = monthly["return"] > 0
-        
+
         month_order = ["Jan","Feb","Mar","Apr","May","Jun",
                        "Jul","Aug","Sep","Oct","Nov","Dec"]
-        
+
         monthly_summary = []
         for m_num, m_name in enumerate(month_order, 1):
             rows = monthly[monthly["month_num"] == m_num]
@@ -57,7 +151,7 @@ def get_seasonal_analysis(ticker: str) -> dict:
             worst    = round(rows["return"].min(), 2)
             signal   = "RISING"  if win_rate >= rising_wr else \
                        "FALLING" if win_rate <= falling_wr else "MIXED"
-            
+
             monthly_summary.append({
                 "month":      m_name,
                 "month_num":  m_num,
@@ -69,12 +163,12 @@ def get_seasonal_analysis(ticker: str) -> dict:
                 "signal":     signal,
                 "is_current": m_num == datetime.now().month,
             })
-        
+
         # ── Part 2: Current Month Historical Detail ───────────────────────────
         current_month = datetime.now().month
         current_month_name = datetime.now().strftime("%B")
         current_month_rows = monthly[monthly["month_num"] == current_month]
-        
+
         year_by_year = []
         for _, row in current_month_rows.iterrows():
             year_by_year.append({
@@ -83,7 +177,7 @@ def get_seasonal_analysis(ticker: str) -> dict:
                 "result":  "UP" if row["return"] > 0 else "DOWN",
             })
         year_by_year.sort(key=lambda x: x["year"], reverse=True)
-        
+
         # ── Part 3: Pre-Result Pattern ────────────────────────────────────────
         pre_result_data = []
         try:
@@ -91,21 +185,20 @@ def get_seasonal_analysis(ticker: str) -> dict:
             earnings = t.earnings_dates
             if earnings is not None:
                 past_earnings = earnings[earnings.index < pd.Timestamp.now(tz='UTC')]
-                
+
                 for result_date in list(past_earnings.index)[:16]:  # last 16 quarters
-                    # Get 10 trading days before result
                     start = result_date - pd.Timedelta(days=15)
                     end   = result_date
-                    
+
                     window = df.loc[
                         (df.index >= start) & (df.index <= end)
                     ]["Close"]
-                    
+
                     if len(window) >= 5:
                         entry_price = float(window.iloc[0])
                         exit_price  = float(window.iloc[-1])
                         pre_ret     = round(((exit_price - entry_price) / entry_price) * 100, 2)
-                        
+
                         pre_result_data.append({
                             "date":       str(result_date.date()),
                             "pre_return": pre_ret,
@@ -114,7 +207,7 @@ def get_seasonal_analysis(ticker: str) -> dict:
                         })
         except Exception as e:
             print(f"Pre-result error: {e}")
-        
+
         pre_result_win_rate = 0
         pre_result_avg      = 0
         pre_result_signal   = "INSUFFICIENT DATA"
@@ -125,13 +218,13 @@ def get_seasonal_analysis(ticker: str) -> dict:
             pre_result_signal   = "BUY BEFORE RESULT"   if pre_result_win_rate >= pre_buy_th and pre_result_avg > 1 else \
                                   "AVOID BEFORE RESULT"  if pre_result_win_rate <= pre_avoid_th else \
                                   "MIXED - NO CLEAR EDGE"
-        
+
         # ── Part 4: Weekly Pattern ────────────────────────────────────────────
         df_weekly = df.copy()
         df_weekly["dow"]     = df_weekly.index.dayofweek  # 0=Mon, 4=Fri
         df_weekly["dow_name"]= df_weekly.index.strftime("%A")
         df_weekly["daily_ret"]= df_weekly["Close"].pct_change() * 100
-        
+
         day_names = ["Monday","Tuesday","Wednesday","Thursday","Friday"]
         weekly_pattern = []
         for i, day in enumerate(day_names):
@@ -142,7 +235,7 @@ def get_seasonal_analysis(ticker: str) -> dict:
                     "avg_return": round(day_rows.mean(), 3),
                     "win_rate":   round((day_rows > 0).mean() * 100, 1),
                 })
-        
+
         res = {
             "ticker":              ticker,
             "monthly_pattern":     monthly_summary,

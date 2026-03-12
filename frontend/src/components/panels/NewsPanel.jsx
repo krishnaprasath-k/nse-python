@@ -142,7 +142,7 @@ export function NewsPanel({ onStockClick }) {
       {/* Header */}
       <div className="flex justify-between items-center mb-3">
         <h2 className="text-[16px] font-bold text-brand-primary">
-          📰 Live Market News
+          Live Market News
         </h2>
         <div className="flex items-center gap-2">
           {(activeCategory || activeSource) && (
