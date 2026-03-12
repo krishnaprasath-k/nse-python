@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import axios from "axios";
 import { Badge } from "./components/shared/Badge";
 import { StockScreener } from "./components/panels/StockScreener";
@@ -8,6 +9,7 @@ import { CorporateEventsTimeline } from "./components/panels/CorporateEventsTime
 import { ShareButton } from "./components/shared/ShareButton";
 import { CorrelationPanel } from "./components/panels/CorrelationPanel";
 import { NewsImpactChips } from "./components/shared/NewsImpactChips";
+import { NewsPanel } from "./components/panels/NewsPanel";
 import { ContractTracker } from "./components/panels/ContractTracker";
 import { SectorRotation } from "./components/panels/SectorRotation";
 import { SeasonalModule } from "./components/panels/SeasonalModule";
@@ -93,12 +95,7 @@ export default function App() {
     refetchInterval: marketStatus === "OPEN" ? 5 * 60 * 1000 : false,
   });
 
-  const { data: news } = useQuery({
-    queryKey: ["news"],
-    queryFn: async () => (await axios.get(`${API_BASE}/news`)).data,
-    staleTime: 5 * 60 * 1000,
-    refetchInterval: marketStatus === "OPEN" ? 5 * 60 * 1000 : false,
-  });
+  // NewsPanel manages its own fetching with category/source filters
 
   const { data: events } = useQuery({
     queryKey: ["events", ticker],
@@ -111,13 +108,22 @@ export default function App() {
     <div className="min-h-screen bg-[#F9FAFB] text-brand-text p-4">
       <div className="max-w-7xl mx-auto space-y-6">
         <header className="flex justify-between items-center pb-4 border-b border-gray-200">
-          <div>
-            <h1 className="text-xl font-bold text-brand-primary">
-              NSE Trading Dashboard
-            </h1>
-            <p className="text-sm text-gray-500">
-              Real-time Professional Terminal
-            </p>
+          <div className="flex items-center gap-4">
+            <div>
+              <h1 className="text-xl font-bold text-brand-primary">
+                NSE Trading Dashboard
+              </h1>
+              <p className="text-sm text-gray-500">
+                Real-time Professional Terminal
+              </p>
+            </div>
+            <Link
+              to="/config"
+              className="flex items-center gap-1 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded text-sm font-medium text-gray-700 transition-colors"
+              title="Model Configuration"
+            >
+              ⚙️ Config
+            </Link>
           </div>
           <div className="text-right">
             {marketStatus === "OPEN" && (
@@ -267,47 +273,7 @@ export default function App() {
                   )}
                 </section>
 
-                <section className="bg-white border rounded p-4 shadow-sm">
-                  <h2 className="text-[16px] font-bold text-brand-primary mb-4">
-                    Live Market News
-                  </h2>
-                  <div className="space-y-4 max-h-80 overflow-y-auto pr-2">
-                    {Array.isArray(news) ? (
-                      news.map((item, i) => (
-                        <div key={i} className="border-b pb-3 relative">
-                          <a
-                            href={item.link}
-                            target="_blank"
-                            className="font-bold text-brand-link hover:underline text-[14px] block mb-1"
-                          >
-                            {item.title}
-                          </a>
-                          {item.ai_note && (
-                            <p className="text-[12px] text-gray-500 bg-blue-50/50 p-2 rounded border border-blue-100/50 mb-2">
-                              <span className="font-bold text-blue-800 tracking-wider text-[10px] uppercase">
-                                AI Note
-                              </span>
-                              : {item.ai_note}
-                            </p>
-                          )}
-                          <div className="mt-1">
-                            <h4 className="text-[10px] font-bold text-gray-500 uppercase flex items-center gap-1">
-                              📈 Impact Analysis
-                            </h4>
-                            <NewsImpactChips
-                              impact={item.impact}
-                              onStockClick={setTicker}
-                            />
-                          </div>
-                        </div>
-                      ))
-                    ) : news ? (
-                      <div className="text-sm text-red-500">
-                        Failed to load news.
-                      </div>
-                    ) : null}
-                  </div>
-                </section>
+                <NewsPanel onStockClick={setTicker} />
               </div>
 
               <div className="space-y-6">

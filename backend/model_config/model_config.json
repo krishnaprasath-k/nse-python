@@ -1,0 +1,89 @@
+{
+  "version": "1.0",
+  "last_updated": "2026-03-12T04:07:59.926447",
+  "global_macro": {
+    "risk_on_threshold": 2,
+    "risk_off_threshold": -2,
+    "sp500_weight": 1,
+    "yield_weight": 1,
+    "dxy_weight": 1
+  },
+  "india_market": {
+    "strong_threshold": 2,
+    "weak_threshold": -2,
+    "vix_low_threshold": 20,
+    "breadth_threshold": 1,
+    "nifty_weight": 1,
+    "breadth_weight": 1,
+    "vix_weight": 1
+  },
+  "universe_score": {
+    "score_max": 5,
+    "shortlist_threshold": 3,
+    "zone_values": [
+      "Demand",
+      "Breakout"
+    ],
+    "results_quality_value": "Strong",
+    "sales_growth_value": "Strong",
+    "volume_accum_value": "High",
+    "extended_penalty_value": "No"
+  },
+  "momentum": {
+    "bullish_threshold": 2,
+    "bearish_threshold": -2,
+    "weight_1d": 1,
+    "weight_20d": 1
+  },
+  "technicals": {
+    "dma_short": 20,
+    "dma_long": 50,
+    "atr_period": 14,
+    "return_short_days": 5,
+    "return_long_days": 20,
+    "vol_avg_period": 20,
+    "vol_spike_lookback": 5,
+    "vol_spike_multiplier": 1.5
+  },
+  "trade_sizing": {
+    "atr_sl_multiplier": 1.5,
+    "atr_target_multiplier": 3.0,
+    "min_rr_ratio": 2.0
+  },
+  "trade_decision": {
+    "buy_requires_india_not_weak": true,
+    "buy_requires_global_not_off": true,
+    "sell_requires_india_weak": true,
+    "primary_bias_ticker": "INFY"
+  },
+  "ema_timing": {
+    "period": 21,
+    "best_timing_pct": 1.0,
+    "near_ema_pct": 3.0,
+    "extended_pct": 5.0
+  },
+  "sector_rotation": {
+    "strong_inflow_score": 3,
+    "mild_inflow_score": 1,
+    "lookback_days": 22
+  },
+  "seasonal": {
+    "years": 10,
+    "rising_win_rate": 60,
+    "falling_win_rate": 40,
+    "pre_result_days": 10,
+    "pre_result_buy_threshold": 65,
+    "pre_result_avoid_threshold": 35
+  },
+  "contracts": {
+    "min_value_cr": 100,
+    "cache_hours": 2
+  },
+  "news_feeds": {
+    "max_items_per_feed": 10,
+    "total_limit": 50,
+    "ai_analysis_limit": 10,
+    "cache_minutes": 10,
+    "disabled_sources": []
+  }
+}

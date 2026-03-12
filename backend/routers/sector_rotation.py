@@ -29,6 +29,13 @@ def get_sector_rotation() -> dict:
     cached = get_cache(cache_key, 900)
     if cached: return cached
 
+    # Load config thresholds
+    from routers.config import load_config
+    cfg = load_config()
+    sr_cfg = cfg.get("sector_rotation", {})
+    strong_th = sr_cfg.get("strong_inflow_score", 3)
+    mild_th = sr_cfg.get("mild_inflow_score", 1)
+    
     results = []
     
     tickers_list = list(SECTOR_TICKERS.values())
@@ -88,16 +95,16 @@ def get_sector_rotation() -> dict:
                 (1 if ret_3m > 0 else -1)
             )
             
-            if momentum_score >= 3:
+            if momentum_score >= strong_th:
                 rotation_signal = "STRONG INFLOW"
                 trend = "RISING"
-            elif momentum_score >= 1:
+            elif momentum_score >= mild_th:
                 rotation_signal = "MILD INFLOW"
                 trend = "RISING"
-            elif momentum_score <= -3:
+            elif momentum_score <= -strong_th:
                 rotation_signal = "STRONG OUTFLOW"
                 trend = "FALLING"
-            elif momentum_score <= -1:
+            elif momentum_score <= -mild_th:
                 rotation_signal = "MILD OUTFLOW"
                 trend = "FALLING"
             else:

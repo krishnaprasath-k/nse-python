@@ -14,8 +14,18 @@ def get_seasonal_analysis(ticker: str) -> dict:
     if cached: return cached
 
     try:
-        # ── Part 1: Monthly Win Rate (last 10 years) ──────────────────────────
-        df = yf.download(ticker, period="10y", progress=False, auto_adjust=True, multi_level_index=False)
+        # Load config
+        from routers.config import load_config
+        cfg = load_config()
+        s_cfg = cfg.get("seasonal", {})
+        data_years = s_cfg.get("years", 10)
+        rising_wr = s_cfg.get("rising_win_rate", 60)
+        falling_wr = s_cfg.get("falling_win_rate", 40)
+        pre_buy_th = s_cfg.get("pre_result_buy_threshold", 65)
+        pre_avoid_th = s_cfg.get("pre_result_avoid_threshold", 35)
+        
+        # ── Part 1: Monthly Win Rate ──────────────────────────
+        df = yf.download(ticker, period=f"{data_years}y", progress=False, auto_adjust=True, multi_level_index=False)
         df = _flatten_yf_download(df, ticker)
         if df is None or df.empty:
             # Fallback: use Ticker.history()
@@ -45,8 +55,8 @@ def get_seasonal_analysis(ticker: str) -> dict:
             win_rate = round(rows["positive"].mean() * 100, 1)
             best     = round(rows["return"].max(), 2)
             worst    = round(rows["return"].min(), 2)
-            signal   = "RISING"  if win_rate >= 60 else \
-                       "FALLING" if win_rate <= 40 else "MIXED"
+            signal   = "RISING"  if win_rate >= rising_wr else \
+                       "FALLING" if win_rate <= falling_wr else "MIXED"
             
             monthly_summary.append({
                 "month":      m_name,
@@ -112,8 +122,8 @@ def get_seasonal_analysis(ticker: str) -> dict:
             ups = sum(1 for x in pre_result_data if x["direction"] == "UP")
             pre_result_win_rate = round((ups / len(pre_result_data)) * 100, 1)
             pre_result_avg      = round(sum(x["pre_return"] for x in pre_result_data) / len(pre_result_data), 2)
-            pre_result_signal   = "BUY BEFORE RESULT"   if pre_result_win_rate >= 65 and pre_result_avg > 1 else \
-                                  "AVOID BEFORE RESULT"  if pre_result_win_rate <= 35 else \
+            pre_result_signal   = "BUY BEFORE RESULT"   if pre_result_win_rate >= pre_buy_th and pre_result_avg > 1 else \
+                                  "AVOID BEFORE RESULT"  if pre_result_win_rate <= pre_avoid_th else \
                                   "MIXED - NO CLEAR EDGE"
         
         # ── Part 4: Weekly Pattern ────────────────────────────────────────────
@@ -146,7 +156,7 @@ def get_seasonal_analysis(ticker: str) -> dict:
                 "sample":     len(pre_result_data),
             },
             "weekly_pattern":      weekly_pattern,
-            "data_years":          10,
+            "data_years":          data_years,
         }
         set_cache(cache_key, res)
         return res

@@ -34,11 +34,23 @@ UNIVERSE_TICKERS = [
   { "ticker": "JSWSTEEL.NS",   "name": "JSW Steel",            "sector": "Metals" },
 ]
 
+def _get_config():
+    from routers.config import load_config
+    return load_config()
+
 def calculate_ema_proximity(close_prices: list) -> dict:
-    if len(close_prices) < 21:
+    cfg = _get_config()
+    ema_cfg = cfg.get("ema_timing", {})
+    
+    ema_period = ema_cfg.get("period", 21)
+    best_pct = ema_cfg.get("best_timing_pct", 1.0)
+    near_pct = ema_cfg.get("near_ema_pct", 3.0)
+    extended_pct = ema_cfg.get("extended_pct", 5.0)
+    
+    if len(close_prices) < ema_period:
         return {"ema21": None, "proximity_pct": None, "ema_signal": "INSUFFICIENT_DATA", "ema_quality": 0, "is_extended": False, "is_near_ema": False}
     
-    k = 2 / (21 + 1)
+    k = 2 / (ema_period + 1)
     ema = close_prices[0]
     for price in close_prices[1:]:
         ema = price * k + ema * (1 - k)
@@ -47,20 +59,20 @@ def calculate_ema_proximity(close_prices: list) -> dict:
     proximity_pct  = ((current_price - ema) / ema) * 100
     abs_proximity  = abs(proximity_pct)
     
-    if abs_proximity <= 1.0:
+    if abs_proximity <= best_pct:
         ema_signal  = "BEST TIMING"
         ema_quality = 5
-    elif abs_proximity <= 3.0:
+    elif abs_proximity <= near_pct:
         ema_signal  = "NEAR EMA"
         ema_quality = 3
-    elif abs_proximity <= 5.0:
+    elif abs_proximity <= extended_pct:
         ema_signal  = "SLIGHTLY EXTENDED"
         ema_quality = 1
     else:
         ema_signal  = "EXTENDED"
         ema_quality = 0
     
-    if proximity_pct < -3.0:
+    if proximity_pct < -near_pct:
         ema_signal  = "BELOW EMA"
         ema_quality = 2
     
@@ -69,18 +81,28 @@ def calculate_ema_proximity(close_prices: list) -> dict:
         "proximity_pct": round(proximity_pct, 2),
         "ema_signal":    ema_signal,
         "ema_quality":   ema_quality,
-        "is_extended":   abs_proximity > 5.0,
-        "is_near_ema":   abs_proximity <= 1.0,
+        "is_extended":   abs_proximity > extended_pct,
+        "is_near_ema":   abs_proximity <= best_pct,
     }
 
 def enhanced_score(stock_data: dict, close_prices: list) -> dict:
+    cfg = _get_config()
+    us_cfg = cfg.get("universe_score", {})
+    
     ema_data = calculate_ema_proximity(close_prices)
     
+    zone_vals = us_cfg.get("zone_values", ["Demand", "Breakout"])
+    rq_val = us_cfg.get("results_quality_value", "Strong")
+    sg_val = us_cfg.get("sales_growth_value", "Strong")
+    va_val = us_cfg.get("volume_accum_value", "High")
+    score_max = us_cfg.get("score_max", 5)
+    shortlist_th = us_cfg.get("shortlist_threshold", 3)
+    
     score = 0
-    score += 1 if stock_data["zone"] in ["Demand", "Breakout"] else 0
-    score += 1 if stock_data.get("result_quality", "Average") == "Strong" else 0
-    score += 1 if stock_data.get("sales_growth", "Average") == "Strong" else 0
-    score += 1 if stock_data.get("vol_accumulation", "Low") == "High" else 0
+    score += 1 if stock_data["zone"] in zone_vals else 0
+    score += 1 if stock_data.get("result_quality", "Average") == rq_val else 0
+    score += 1 if stock_data.get("sales_growth", "Average") == sg_val else 0
+    score += 1 if stock_data.get("vol_accumulation", "Low") == va_val else 0
     score += 1 if not ema_data["is_extended"] else 0
     score += 1 if ema_data["is_near_ema"] else 0
     
@@ -91,8 +113,8 @@ def enhanced_score(stock_data: dict, close_prices: list) -> dict:
         "ema21":          ema_data["ema21"],
         "ema_proximity":  ema_data["proximity_pct"],
         "ema_signal":     timing_label,
-        "score":          min(score, 6),
-        "shortlist":      score >= 3,
+        "score":          min(score, score_max + 1),  # +1 because we have 6 factors vs score_max 5
+        "shortlist":      score >= shortlist_th,
         "entry_timing":   timing_label,
     }
 
@@ -101,6 +123,10 @@ def get_screener():
     cache_key = "screener_data"
     cached = get_cache(cache_key, 300)
     if cached: return cached
+    
+    cfg = _get_config()
+    seasonal_cfg = cfg.get("seasonal", {})
+    ema_cfg = cfg.get("ema_timing", {})
     
     tickers = [t["ticker"] for t in UNIVERSE_TICKERS]
     
@@ -160,11 +186,15 @@ def get_screener():
             
             enhanced = enhanced_score(base_data, close_prices)
             
+            # Read thresholds from config for probability scoring
+            rising_wr = seasonal_cfg.get("rising_win_rate", 60)
+            falling_wr = seasonal_cfg.get("falling_win_rate", 40)
+            
             scores = {
                 "macro":      2 if enhanced["global_risk"] == "RISK ON" else 0 if enhanced["global_risk"] == "RISK OFF" else 1,
                 "sector":     2 if enhanced["sector_trend"] == "RISING" else 0 if enhanced["sector_trend"] == "FALLING" else 1,
                 "event":      2 if enhanced["days_to_result"] <= 15 else 1 if enhanced["days_to_result"] <= 30 else 0,
-                "seasonal":   2 if enhanced["monthly_win_rate"] >= 60 else 0 if enhanced["monthly_win_rate"] <= 40 else 1,
+                "seasonal":   2 if enhanced["monthly_win_rate"] >= rising_wr else 0 if enhanced["monthly_win_rate"] <= falling_wr else 1,
                 "statistical": 2 if enhanced["ema_signal"] == "BEST TIMING" else 1 if enhanced["ema_signal"] == "NEAR EMA" else 0,
                 "technical":   enhanced["technical_score"],
             }
