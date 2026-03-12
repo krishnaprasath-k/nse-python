@@ -1,215 +1,99 @@
-from fastapi import APIRouter
-import yfinance as yf
-import pandas as pd
-from cache.cache import get_cache, set_cache
-from services.yfinance_service import download_multiple_tickers, _safe_float, _fetch_nse_stock_quote
+import math
+from fastapi import APIRouter, Query
+from cache.cache import get_cache
+from services.screener_builder import (
+    get_screener_state, trigger_if_needed,
+    SCREENER_CACHE_KEY, SCREENER_CACHE_TTL,
+)
 
 router = APIRouter()
 
-UNIVERSE_TICKERS = [
-  { "ticker": "RELIANCE.NS",   "name": "Reliance Industries",  "sector": "Energy" },
-  { "ticker": "HDFCBANK.NS",   "name": "HDFC Bank",            "sector": "Banking" },
-  { "ticker": "TCS.NS",        "name": "Tata Consultancy",     "sector": "IT" },
-  { "ticker": "INFY.NS",       "name": "Infosys",              "sector": "IT" },
-  { "ticker": "ICICIBANK.NS",  "name": "ICICI Bank",           "sector": "Banking" },
-  { "ticker": "SBIN.NS",       "name": "State Bank of India",  "sector": "Banking" },
-  { "ticker": "BAJFINANCE.NS", "name": "Bajaj Finance",        "sector": "NBFC" },
-  { "ticker": "MARUTI.NS",     "name": "Maruti Suzuki",        "sector": "Auto" },
-  { "ticker": "TITAN.NS",      "name": "Titan Company",        "sector": "Consumer" },
-  { "ticker": "AXISBANK.NS",   "name": "Axis Bank",            "sector": "Banking" },
-  { "ticker": "WIPRO.NS",      "name": "Wipro",                "sector": "IT" },
-  { "ticker": "HCLTECH.NS",    "name": "HCL Technologies",     "sector": "IT" },
-  { "ticker": "ONGC.NS",       "name": "ONGC",                 "sector": "Energy" },
-  { "ticker": "NTPC.NS",       "name": "NTPC",                 "sector": "Power" },
-  { "ticker": "POWERGRID.NS",  "name": "Power Grid Corp",      "sector": "Power" },
-  { "ticker": "LT.NS",         "name": "Larsen & Toubro",      "sector": "Infra" },
-  { "ticker": "NBCC.NS",       "name": "NBCC India",           "sector": "Infra" },
-  { "ticker": "TATAMOTORS.NS", "name": "Tata Motors",          "sector": "Auto" },
-  { "ticker": "TATASTEEL.NS",  "name": "Tata Steel",           "sector": "Metals" },
-  { "ticker": "ADANIENT.NS",   "name": "Adani Enterprises",    "sector": "Conglomerate" },
-  { "ticker": "SUNPHARMA.NS",  "name": "Sun Pharmaceutical",   "sector": "Pharma" },
-  { "ticker": "DRREDDY.NS",    "name": "Dr Reddys Labs",       "sector": "Pharma" },
-  { "ticker": "BAJAJFINSV.NS", "name": "Bajaj Finserv",        "sector": "Finance" },
-  { "ticker": "HINDALCO.NS",   "name": "Hindalco Industries",  "sector": "Metals" },
-  { "ticker": "JSWSTEEL.NS",   "name": "JSW Steel",            "sector": "Metals" },
-]
 
-def _get_config():
-    from routers.config import load_config
-    return load_config()
+@router.get("/screener/status")
+def screener_status() -> dict:
+    return get_screener_state()
 
-def calculate_ema_proximity(close_prices: list) -> dict:
-    cfg = _get_config()
-    ema_cfg = cfg.get("ema_timing", {})
-    
-    ema_period = ema_cfg.get("period", 21)
-    best_pct = ema_cfg.get("best_timing_pct", 1.0)
-    near_pct = ema_cfg.get("near_ema_pct", 3.0)
-    extended_pct = ema_cfg.get("extended_pct", 5.0)
-    
-    if len(close_prices) < ema_period:
-        return {"ema21": None, "proximity_pct": None, "ema_signal": "INSUFFICIENT_DATA", "ema_quality": 0, "is_extended": False, "is_near_ema": False}
-    
-    k = 2 / (ema_period + 1)
-    ema = close_prices[0]
-    for price in close_prices[1:]:
-        ema = price * k + ema * (1 - k)
-    
-    current_price  = close_prices[-1]
-    proximity_pct  = ((current_price - ema) / ema) * 100
-    abs_proximity  = abs(proximity_pct)
-    
-    if abs_proximity <= best_pct:
-        ema_signal  = "BEST TIMING"
-        ema_quality = 5
-    elif abs_proximity <= near_pct:
-        ema_signal  = "NEAR EMA"
-        ema_quality = 3
-    elif abs_proximity <= extended_pct:
-        ema_signal  = "SLIGHTLY EXTENDED"
-        ema_quality = 1
-    else:
-        ema_signal  = "EXTENDED"
-        ema_quality = 0
-    
-    if proximity_pct < -near_pct:
-        ema_signal  = "BELOW EMA"
-        ema_quality = 2
-    
-    return {
-        "ema21":         round(ema, 2),
-        "proximity_pct": round(proximity_pct, 2),
-        "ema_signal":    ema_signal,
-        "ema_quality":   ema_quality,
-        "is_extended":   abs_proximity > extended_pct,
-        "is_near_ema":   abs_proximity <= best_pct,
-    }
-
-def enhanced_score(stock_data: dict, close_prices: list) -> dict:
-    cfg = _get_config()
-    us_cfg = cfg.get("universe_score", {})
-    
-    ema_data = calculate_ema_proximity(close_prices)
-    
-    zone_vals = us_cfg.get("zone_values", ["Demand", "Breakout"])
-    rq_val = us_cfg.get("results_quality_value", "Strong")
-    sg_val = us_cfg.get("sales_growth_value", "Strong")
-    va_val = us_cfg.get("volume_accum_value", "High")
-    score_max = us_cfg.get("score_max", 5)
-    shortlist_th = us_cfg.get("shortlist_threshold", 3)
-    
-    score = 0
-    score += 1 if stock_data["zone"] in zone_vals else 0
-    score += 1 if stock_data.get("result_quality", "Average") == rq_val else 0
-    score += 1 if stock_data.get("sales_growth", "Average") == sg_val else 0
-    score += 1 if stock_data.get("vol_accumulation", "Low") == va_val else 0
-    score += 1 if not ema_data["is_extended"] else 0
-    score += 1 if ema_data["is_near_ema"] else 0
-    
-    timing_label = ema_data["ema_signal"]
-    
-    return {
-        **stock_data,
-        "ema21":          ema_data["ema21"],
-        "ema_proximity":  ema_data["proximity_pct"],
-        "ema_signal":     timing_label,
-        "score":          min(score, score_max + 1),  # +1 because we have 6 factors vs score_max 5
-        "shortlist":      score >= shortlist_th,
-        "entry_timing":   timing_label,
-    }
 
 @router.get("/screener")
-def get_screener():
-    cache_key = "screener_data"
-    cached = get_cache(cache_key, 300)
-    if cached: return cached
-    
-    cfg = _get_config()
-    seasonal_cfg = cfg.get("seasonal", {})
-    ema_cfg = cfg.get("ema_timing", {})
-    
-    tickers = [t["ticker"] for t in UNIVERSE_TICKERS]
-    
-    try:
-        # Use the robust multi-ticker downloader with fallbacks
-        ticker_data = download_multiple_tickers(tickers, period="3mo")
-        
-        res = []
-        for t_info in UNIVERSE_TICKERS:
-            t = t_info["ticker"]
-            price = 0
-            change_pct = 0
-            close_prices = []
-            
-            try:
-                df = ticker_data.get(t)
-                if df is not None and not df.empty and 'Close' in df.columns:
-                    closes = df['Close'].dropna()
-                    if len(closes) > 0:
-                        current_close = _safe_float(closes.iloc[-1])
-                        prev_close = _safe_float(closes.iloc[-2]) if len(closes) > 1 else current_close
-                        if prev_close != 0:
-                            change_pct = (current_close - prev_close) / prev_close
-                        price = current_close
-                        close_prices = [_safe_float(v) for v in closes.tolist()]
-                else:
-                    # Fallback: try NSE direct API
-                    symbol = t.replace(".NS", "")
-                    nse_data = _fetch_nse_stock_quote(symbol)
-                    if nse_data and nse_data["price"] > 0:
-                        price = nse_data["price"]
-                        change_pct = nse_data["change_pct"]
-                        close_prices = [nse_data.get("prev", price), price]
-            except Exception as e:
-                print(f"[screener] Error processing {t}: {e}")
-            
-            zone = "Breakout" if change_pct > 0.05 else ("Demand" if change_pct > 0.01 else "None")
-            mock_score = 3 if change_pct > 0 else 1
-            
-            base_data = {
-                "ticker": t,
-                "name": t_info["name"],
-                "sector": t_info["sector"],
-                "price": float(price),
-                "change_pct": float(change_pct),
-                "zone": zone,
-                "result_quality": "Strong" if mock_score > 2 else "Average",
-                "sales_growth": "Strong",
-                "vol_accumulation": "High" if mock_score > 2 else "Low",
-                "is_extended": mock_score > 4,
-                "global_risk": "NEUTRAL", 
-                "sector_trend": "RISING",
-                "days_to_result": 20,
-                "monthly_win_rate": 50,
-                "technical_score": mock_score,
-            }
-            
-            enhanced = enhanced_score(base_data, close_prices)
-            
-            # Read thresholds from config for probability scoring
-            rising_wr = seasonal_cfg.get("rising_win_rate", 60)
-            falling_wr = seasonal_cfg.get("falling_win_rate", 40)
-            
-            scores = {
-                "macro":      2 if enhanced["global_risk"] == "RISK ON" else 0 if enhanced["global_risk"] == "RISK OFF" else 1,
-                "sector":     2 if enhanced["sector_trend"] == "RISING" else 0 if enhanced["sector_trend"] == "FALLING" else 1,
-                "event":      2 if enhanced["days_to_result"] <= 15 else 1 if enhanced["days_to_result"] <= 30 else 0,
-                "seasonal":   2 if enhanced["monthly_win_rate"] >= rising_wr else 0 if enhanced["monthly_win_rate"] <= falling_wr else 1,
-                "statistical": 2 if enhanced["ema_signal"] == "BEST TIMING" else 1 if enhanced["ema_signal"] == "NEAR EMA" else 0,
-                "technical":   enhanced["technical_score"],
-            }
-            final_score = sum(scores.values())
+def get_screener(
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    sort: str = Query("score"),        # score | return | name | ema
+    order: str = Query("desc"),        # asc | desc
+    filter: str = Query("all"),        # all | buy | watch | avoid | best_timing
+    search: str = Query(""),
+    sector: str = Query(""),
+) -> dict:
+    full = get_cache(SCREENER_CACHE_KEY, SCREENER_CACHE_TTL)
+    state = get_screener_state()
 
-            enhanced["probability_scores"] = scores
-            enhanced["final_score"] = final_score
-            enhanced["final_signal"] = "STRONG BUY" if final_score >= 9 else "BUY" if final_score >= 7 else "WATCH" if final_score >= 5 else "AVOID"
-            
-            res.append(enhanced)
-        
-        set_cache(cache_key, res)
-        return res
-    except Exception as e:
-        print(f"Error in screener: {e}")
-        import traceback
-        traceback.print_exc()
-        return []
+    if full is None:
+        trigger_if_needed()
+        current = get_screener_state()
+        return {
+            "status": current["status"] if current["status"] == "building" else "building",
+            "progress": current["progress"],
+            "total": 0,
+            "page": page,
+            "limit": limit,
+            "total_pages": 0,
+            "stocks": [],
+            "summary": {},
+        }
+
+    stocks = list(full)
+
+    # Filters
+    if filter == "buy":
+        stocks = [s for s in stocks if s["final_signal"] in ("BUY", "STRONG BUY")]
+    elif filter == "watch":
+        stocks = [s for s in stocks if s["final_signal"] == "WATCH"]
+    elif filter == "avoid":
+        stocks = [s for s in stocks if s["final_signal"] == "AVOID"]
+    elif filter == "best_timing":
+        stocks = [s for s in stocks if s["ema_signal"] == "BEST TIMING"]
+
+    if sector:
+        stocks = [s for s in stocks if s.get("sector", "").lower() == sector.lower()]
+
+    if search:
+        q = search.lower()
+        stocks = [s for s in stocks if q in s["name"].lower() or q in s["ticker"].lower()]
+
+    # Sort
+    reverse = order == "desc"
+    if sort == "score":
+        stocks.sort(key=lambda x: x["final_score"], reverse=reverse)
+    elif sort == "return":
+        stocks.sort(key=lambda x: x["change_pct"], reverse=reverse)
+    elif sort == "name":
+        stocks.sort(key=lambda x: x["name"].lower(), reverse=reverse)
+    elif sort == "ema":
+        ema_order = {"BEST TIMING": 5, "NEAR EMA": 4, "SLIGHTLY EXTENDED": 3,
+                     "BELOW EMA": 2, "EXTENDED": 1, "INSUFFICIENT_DATA": 0}
+        stocks.sort(key=lambda x: ema_order.get(x["ema_signal"], 0), reverse=reverse)
+
+    total = len(stocks)
+    total_pages = max(1, math.ceil(total / limit))
+    page = min(page, total_pages)
+    offset = (page - 1) * limit
+    page_stocks = stocks[offset: offset + limit]
+
+    buy_count = sum(1 for s in stocks if s["final_signal"] in ("BUY", "STRONG BUY"))
+    best_timing = sum(1 for s in stocks if s["ema_signal"] == "BEST TIMING")
+
+    return {
+        "status": "ready",
+        "progress": 100,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "total_pages": total_pages,
+        "stocks": page_stocks,
+        "summary": {
+            "buy_count": buy_count,
+            "watch_count": sum(1 for s in stocks if s["final_signal"] == "WATCH"),
+            "avoid_count": total - buy_count - sum(1 for s in stocks if s["final_signal"] == "WATCH"),
+            "best_timing_count": best_timing,
+        },
+    }

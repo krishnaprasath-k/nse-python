@@ -9,7 +9,6 @@ from routers import market, stock, screener, news, trade, seasonal, contracts, s
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Pre-warm NSE symbol list cache on startup (non-blocking)
     def _prewarm():
         try:
             from services.nse_symbols import get_all_nse_symbols
@@ -17,6 +16,15 @@ async def lifespan(app: FastAPI):
             print(f"[startup] Symbol list ready: {len(syms)} NSE EQ symbols")
         except Exception as e:
             print(f"[startup] Symbol pre-warm failed: {e}")
+
+        try:
+            from services.screener_builder import trigger_if_needed
+            started = trigger_if_needed()
+            if started:
+                print("[startup] Screener build triggered in background")
+        except Exception as e:
+            print(f"[startup] Screener pre-warm failed: {e}")
+
     threading.Thread(target=_prewarm, daemon=True).start()
     yield
 
