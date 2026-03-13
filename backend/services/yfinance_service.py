@@ -238,38 +238,52 @@ def get_indices(period="5d"):
     tickers = ["^NSEI", "^NSEBANK", "^INDIAVIX", "^GSPC", "^IXIC", "UUP", "CL=F"]
     res = {}
 
-    # ── Attempt 1: yfinance ──
+    # ── Attempt 1: yfinance batch download ──
     try:
-        for t in tickers:
+        batch = yf.download(tickers, period=period, progress=False, threads=True)
+        if batch is not None and not batch.empty and isinstance(batch.columns, pd.MultiIndex):
+            close_df = batch["Close"] if "Close" in batch.columns.get_level_values(0) else None
+            if close_df is not None:
+                for t in tickers:
+                    try:
+                        if t not in close_df.columns:
+                            continue
+                        closes = close_df[t].dropna()
+                        if len(closes) < 1:
+                            continue
+                        current_close = _safe_float(closes.iloc[-1])
+                        prev_close = _safe_float(closes.iloc[-2]) if len(closes) > 1 else current_close
+                        if current_close == 0:
+                            continue
+                        change_pct = (current_close - prev_close) / prev_close if prev_close != 0 else 0
+                        res[t] = {"price": float(current_close), "change_pct": float(change_pct), "prev": float(prev_close)}
+                    except Exception as e:
+                        print(f"[yfinance batch] Failed to extract {t}: {e}")
+    except Exception as e:
+        print(f"[yfinance] Batch download failed: {e}")
+
+    # Individual fallback for any tickers missed by the batch
+    missing_yf = [t for t in tickers if t not in res or res[t]["price"] == 0]
+    if missing_yf:
+        print(f"[yfinance] Individual fallback for: {missing_yf}")
+        for t in missing_yf:
             try:
-                time.sleep(0.3)
+                time.sleep(0.2)
                 data = yf.download(t, period=period, progress=False, multi_level_index=False)
                 data = _flatten_yf_download(data, t)
-
                 if data is None or data.empty or 'Close' not in data.columns:
                     continue
-
                 closes = data['Close'].dropna()
                 if len(closes) < 1:
                     continue
-
                 current_close = _safe_float(closes.iloc[-1])
                 prev_close = _safe_float(closes.iloc[-2]) if len(closes) > 1 else current_close
-
                 if current_close == 0:
                     continue
-
                 change_pct = (current_close - prev_close) / prev_close if prev_close != 0 else 0
-
-                res[t] = {
-                    "price": float(current_close),
-                    "change_pct": float(change_pct),
-                    "prev": float(prev_close),
-                }
+                res[t] = {"price": float(current_close), "change_pct": float(change_pct), "prev": float(prev_close)}
             except Exception as e:
-                print(f"[yfinance] Failed for {t}: {e}")
-    except Exception as e:
-        print(f"[yfinance] Error in indices loop: {e}")
+                print(f"[yfinance individual] Failed for {t}: {e}")
 
     # ── Attempt 2: NSE India fallback for missing Indian indices ──
     nse_tickers = ["^NSEI", "^NSEBANK", "^INDIAVIX"]

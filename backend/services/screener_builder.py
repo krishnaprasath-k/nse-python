@@ -9,7 +9,7 @@ from cache.cache import get_cache, set_cache
 BATCH_SIZE = 50
 BATCH_DELAY = 1.5
 SCREENER_CACHE_KEY = "screener_full_data"
-SCREENER_CACHE_TTL = 1800  # 30 min
+SCREENER_CACHE_TTL = 14400  # 4 hours
 
 _lock = threading.Lock()
 _state = {

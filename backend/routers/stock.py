@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 from services.yfinance_service import get_stock_history, get_stock_info, _flatten_yf_download, _safe_float, download_multiple_tickers
 from services.indicators import calculate_indicators
+from cache.cache import get_cache, set_cache
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -76,6 +77,10 @@ def get_stock_data(ticker: str):
 
 @router.get("/stock/{ticker}/events")
 def get_corporate_events(ticker: str):
+    cache_key = f"events_{ticker}"
+    cached = get_cache(cache_key, 86400)
+    if cached is not None:
+        return cached
     try:
         t = yf.Ticker(ticker)
         events = []
@@ -116,12 +121,18 @@ def get_corporate_events(ticker: str):
         except: pass
 
         events.sort(key=lambda x: x["date"], reverse=True)
-        return events[:30]
+        result = events[:30]
+        set_cache(cache_key, result)
+        return result
     except Exception as e:
         return []
 
 @router.get("/stock/{ticker}/seasonal")
 def get_seasonal_pattern(ticker: str, years: int = 10):
+    cache_key = f"seasonal_{ticker}_{years}"
+    cached = get_cache(cache_key, 86400)
+    if cached is not None:
+        return cached
     try:
         # Use Ticker.history() which returns flat columns reliably
         t = yf.Ticker(ticker)
@@ -175,6 +186,7 @@ def get_seasonal_pattern(ticker: str, years: int = 10):
                               "FALLING" if row["win_rate"] <= 0.4 else "MIXED",
                 "years":      int(row["count"]) if pd.notna(row["count"]) else 0,
             })
+        set_cache(cache_key, result)
         return result
     except Exception as e:
         print(f"[seasonal] Error for {ticker}: {e}")
@@ -184,6 +196,10 @@ def get_seasonal_pattern(ticker: str, years: int = 10):
 
 @router.get("/stock/{ticker}/correlation")
 def get_correlation(ticker: str, period: str = "1y"):
+    cache_key = f"correlation_{ticker}_{period}"
+    cached = get_cache(cache_key, 3600)
+    if cached is not None:
+        return cached
     try:
         peers = {
             "Nifty 50":    "^NSEI",
@@ -262,6 +278,7 @@ def get_correlation(ticker: str, period: str = "1y"):
             })
 
         result.sort(key=lambda x: abs(x["correlation"]), reverse=True)
+        set_cache(cache_key, result)
         return result
     except Exception as e:
         print(f"[correlation] Error for {ticker}: {e}")
