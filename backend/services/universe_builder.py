@@ -1,10 +1,11 @@
+import gc
 import time
 import threading
 import yfinance as yf
 import pandas as pd
 from cache.cache import get_cache, set_cache
 
-BATCH_SIZE = 300
+BATCH_SIZE = 50
 BATCH_DELAY = 2.0
 ANNUAL_CACHE_KEY = "universe_annual_returns_{year}"
 ANNUAL_CACHE_TTL = 86400
@@ -50,6 +51,7 @@ def build_universe_annual_returns(year: int):
         end_dt = f"{year + 1}-01-01"
 
         for batch_idx, batch in enumerate(batches):
+            raw = None
             try:
                 raw = yf.download(
                     batch,
@@ -88,6 +90,9 @@ def build_universe_annual_returns(year: int):
 
             except Exception as e:
                 print(f"[universe_builder] Batch {batch_idx} error: {e}")
+            finally:
+                del raw
+                gc.collect()
 
             processed = min((batch_idx + 1) * BATCH_SIZE, len(tickers))
             progress = int(processed / len(tickers) * 100)

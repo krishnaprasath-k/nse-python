@@ -1,3 +1,4 @@
+import gc
 import time
 import threading
 import numpy as np
@@ -5,7 +6,7 @@ import yfinance as yf
 import pandas as pd
 from cache.cache import get_cache, set_cache
 
-BATCH_SIZE = 300
+BATCH_SIZE = 50
 BATCH_DELAY = 1.5
 SCREENER_CACHE_KEY = "screener_full_data"
 SCREENER_CACHE_TTL = 1800  # 30 min
@@ -154,6 +155,7 @@ def build_screener():
         batches = [tickers[i:i + BATCH_SIZE] for i in range(0, len(tickers), BATCH_SIZE)]
 
         for idx, batch in enumerate(batches):
+            raw = None
             try:
                 raw = yf.download(batch, period="3mo", progress=False,
                                   auto_adjust=True, threads=True)
@@ -178,6 +180,9 @@ def build_screener():
                         pass
             except Exception as e:
                 print(f"[screener_builder] Batch {idx} error: {e}")
+            finally:
+                del raw
+                gc.collect()
 
             processed = min((idx + 1) * BATCH_SIZE, len(tickers))
             _update(processed=processed, progress=int(processed / len(tickers) * 100))
