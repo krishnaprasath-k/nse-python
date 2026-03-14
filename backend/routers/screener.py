@@ -1,6 +1,6 @@
 import math
 from fastapi import APIRouter, Query
-from cache.cache import get_cache
+from cache.cache import get_cache, set_cache
 from services.screener_builder import (
     get_screener_state, trigger_if_needed,
     SCREENER_CACHE_KEY, SCREENER_CACHE_TTL,
@@ -100,13 +100,20 @@ def get_screener(
     }
 
 
+RANKED_CACHE_KEY = "screener_ranked"
+RANKED_CACHE_TTL = 300  # 5 min — fast refresh, avoids re-scoring 500+ stocks
+
+_ENRICH_FIELDS = ("name", "sector", "price", "change_pct", "ema_signal", "zone")
+_ENRICH_DEFAULTS = {"name": "-", "sector": "-", "price": None, "change_pct": 0, "ema_signal": "-", "zone": "-"}
+
+
 @router.get("/screener/ranked")
 def get_ranked(
     top: int = Query(15, ge=1, le=50),
 ) -> dict:
     """
-    Returns top BUY and top SELL candidates side by side using the full
-    Model-1→4 probability ranking system (probability_ranking.py).
+    Returns top BUY and top SELL candidates side by side.
+    Cached for 5 min to avoid re-ranking 500+ stocks on every request.
     """
     full = get_cache(SCREENER_CACHE_KEY, SCREENER_CACHE_TTL)
     if full is None:
@@ -120,7 +127,20 @@ def get_ranked(
             "market": {},
         }
 
-    # Fetch live market regime
+    # Check ranked cache first
+    cached = get_cache(RANKED_CACHE_KEY, RANKED_CACHE_TTL)
+    if cached and cached.get("_top", 0) >= top:
+        return {
+            "status": "ready",
+            "buy":    cached["buy"][:top],
+            "sell":   cached["sell"][:top],
+            "market": cached["market"],
+        }
+
+    # Build O(1) ticker→stock index once
+    index = {s["ticker"]: s for s in full}
+
+    # Fetch market regime once
     global_risk = "NEUTRAL"
     india_bias  = "RANGE"
     try:
@@ -132,75 +152,67 @@ def get_ranked(
         pass
 
     ranked = rank_watchlist(
-        screener_results=list(full),
+        screener_results=full,
         global_risk=global_risk,
         india_bias=india_bias,
         max_positions=top,
     )
 
-    # Build lean buy list
-    buy_list = [
-        {
-            "rank":          i + 1,
-            "ticker":        r["ticker"],
-            "total_score":   r["total_score"],
-            "signal":        r["signal"],
-            "demand_type":   r.get("demand_type", "-"),
-            "breakdown":     r["breakdown"],
-            # Enrich from raw screener data
-            **_enrich(r["ticker"], full),
-        }
-        for i, r in enumerate(ranked["full_long_ranked"][:top])
-    ]
+    max_top = max(top, 30)  # cache a wider slice to serve future requests
 
-    sell_list = [
-        {
-            "rank":        i + 1,
-            "ticker":      r["ticker"],
-            "total_score": r["total_score"],
-            "signal":      r["signal"],
-            "breakdown":   r["breakdown"],
-            **_enrich(r["ticker"], full),
-        }
-        for i, r in enumerate(ranked["full_short_ranked"][:top])
-    ] if ranked["full_short_ranked"] else _build_sell_from_screener(full, top)
+    buy_list  = _build_list(ranked["full_long_ranked"][:max_top],  index, include_demand=True)
+    sell_list = (_build_list(ranked["full_short_ranked"][:max_top], index)
+                 if ranked["full_short_ranked"]
+                 else _build_sell_from_screener(full, max_top))
+
+    market_info = {
+        "global_risk": global_risk,
+        "india_bias":  india_bias,
+        "is_bearish":  ranked["market_regime"]["is_bearish"],
+    }
+
+    # Cache the wider slice for subsequent requests
+    set_cache(RANKED_CACHE_KEY, {
+        "buy":    buy_list,
+        "sell":   sell_list,
+        "market": market_info,
+        "_top":   max_top,
+    })
 
     return {
-        "status":  "ready",
-        "buy":     buy_list,
-        "sell":    sell_list,
-        "market": {
-            "global_risk": global_risk,
-            "india_bias":  india_bias,
-            "is_bearish":  ranked["market_regime"]["is_bearish"],
-        },
+        "status": "ready",
+        "buy":    buy_list[:top],
+        "sell":   sell_list[:top],
+        "market": market_info,
     }
 
 
-def _enrich(ticker: str, full: list) -> dict:
-    """Pull price/sector/ema data from raw screener cache for a ticker."""
-    for s in full:
-        if s.get("ticker") == ticker:
-            return {
-                "name":       s.get("name", ticker),
-                "sector":     s.get("sector", "-"),
-                "price":      s.get("price"),
-                "change_pct": s.get("change_pct", 0),
-                "ema_signal": s.get("ema_signal", "-"),
-                "zone":       s.get("zone", "-"),
-            }
-    return {"name": ticker, "sector": "-", "price": None, "change_pct": 0, "ema_signal": "-", "zone": "-"}
+def _build_list(ranked_items: list, index: dict, include_demand: bool = False) -> list:
+    """Build enriched response list from ranked results + O(1) index lookup."""
+    result = []
+    for i, r in enumerate(ranked_items):
+        ticker = r["ticker"]
+        raw = index.get(ticker)
+        enriched = {f: raw.get(f, _ENRICH_DEFAULTS[f]) for f in _ENRICH_FIELDS} if raw else dict(_ENRICH_DEFAULTS)
+        entry = {
+            "rank":        i + 1,
+            "ticker":      ticker,
+            "total_score": r["total_score"],
+            "signal":      r["signal"],
+            "breakdown":   r["breakdown"],
+            **enriched,
+        }
+        if include_demand:
+            entry["demand_type"] = r.get("demand_type", "-")
+        result.append(entry)
+    return result
 
 
 def _build_sell_from_screener(full: list, top: int) -> list:
-    """
-    Fallback: when market isn't bearish, derive sell candidates as the
-    lowest-scoring stocks (potential weakness / avoid).
-    """
-    sorted_weak = sorted(full, key=lambda x: x.get("final_score", 0))
-    result = []
-    for i, s in enumerate(sorted_weak[:top]):
-        result.append({
+    """Fallback sell list from weakest-scoring stocks when market isn't bearish."""
+    sorted_weak = sorted(full, key=lambda x: x.get("final_score", 0))[:top]
+    return [
+        {
             "rank":        i + 1,
             "ticker":      s["ticker"],
             "total_score": s.get("final_score", 0),
@@ -212,5 +224,6 @@ def _build_sell_from_screener(full: list, top: int) -> list:
             "ema_signal":  s.get("ema_signal", "-"),
             "zone":        s.get("zone", "-"),
             "breakdown":   {},
-        })
-    return result
+        }
+        for i, s in enumerate(sorted_weak)
+    ]

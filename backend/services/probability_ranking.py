@@ -24,34 +24,32 @@ Signal thresholds:
 from __future__ import annotations
 from typing import Optional
 
-# ─── Priority Sectors (Model-1) ──────────────────────────────────────────────
+# ─── Priority Sectors (Model-1) — pre-built tuples for fast matching ─────────
 
-PRIORITY_SECTORS = {
-    # Tier-1: highest demand urgency / policy backing  (score = 15)
+_TIER1_SECTORS = (
     "semiconductor", "electronics", "ems", "defence", "power", "energy",
     "fertilizer", "agro", "agriculture", "oil & gas", "gas", "petroleum",
     "metals", "copper", "steel", "aluminium", "infrastructure", "water",
     "irrigation", "renewable energy",
-    # Tier-2: secondary priority (score = 8)
+)
+_TIER2_SECTORS = (
     "banking", "finance", "chemicals", "real estate", "construction",
     "telecom", "logistics", "shipping",
-}
-
-DEFENSIVE_SECTORS = {"fmcg", "pharma", "utilities", "healthcare", "consumer staples"}
-
-SPECULATIVE_SECTORS = {"small cap", "microcap", "penny", "speculative"}
+)
+_DEFENSIVE = ("fmcg", "pharma", "utilities", "healthcare", "consumer staples")
+_SPECULATIVE = ("small cap", "microcap", "penny", "speculative")
 
 
 def _sector_score(sector: str) -> int:
     """Dimension 2a — Sector classification (0-15)."""
     s = sector.lower()
-    if any(p in s for p in list(PRIORITY_SECTORS)[:20]):
+    if any(p in s for p in _TIER1_SECTORS):
         return 15
-    if any(p in s for p in list(PRIORITY_SECTORS)[20:]):
+    if any(p in s for p in _TIER2_SECTORS):
         return 8
-    if any(d in s for d in DEFENSIVE_SECTORS):
+    if any(d in s for d in _DEFENSIVE):
         return 3
-    if any(sp in s for sp in SPECULATIVE_SECTORS):
+    if any(sp in s for sp in _SPECULATIVE):
         return 0
     return 5  # unknown but not speculative
 
@@ -374,67 +372,126 @@ def rank_stock_short(
 
 
 # ─── Ranker — sort + filter watchlist ────────────────────────────────────────
+#
+#  Performance: regime scores are computed ONCE and reused for all stocks.
+#  Only the per-stock dimensions (2-6) are computed in the loop.
+#  Sorting uses a key function on a pre-computed int, no dict allocs.
+
+_LONG_BUY_SIGNALS  = frozenset({"STRONG BUY", "BUY"})
+_SHORT_BUY_SIGNALS = frozenset({"STRONG SHORT", "SHORT"})
+
 
 def rank_watchlist(
-    screener_results: list[dict],
+    screener_results: list,
     global_risk: str = "NEUTRAL",
     india_bias: str  = "RANGE",
     max_positions: int = 4,
 ) -> dict:
     """
-    Take the raw screener results (from screener_builder.py) and apply
-    the full Model-1→4 probability ranking. Returns ranked long + short lists.
-
-    screener_results: list of dicts from screener_builder._score_stock()
-    Each dict must have: ticker, sector, ema_signal, zone, change_pct,
-                         vol_spike, probability_scores{}, final_score
+    Apply Model-1→4 probability ranking. Returns ranked long + short lists.
+    Optimised: regime scores computed once, per-stock scoring is scalar-only.
     """
     is_bearish = (global_risk == "RISK OFF" and india_bias == "WEAK")
 
-    long_ranked  = []
-    short_ranked = []
+    # Compute regime scores ONCE (same for every stock)
+    d1_long  = _regime_score(global_risk, india_bias)
+    d1_short = _regime_score_bearish(global_risk, india_bias) if is_bearish else 0
 
-    for s in screener_results:
+    long_ranked  = [None] * len(screener_results)  # pre-allocate
+    short_ranked = [] if is_bearish else None
+
+    for idx, s in enumerate(screener_results):
         ticker     = s.get("ticker", "")
         sector     = s.get("sector", "Unknown")
         ema_signal = s.get("ema_signal", "INSUFFICIENT_DATA")
         zone       = s.get("zone", "None")
         change_pct = s.get("change_pct", 0.0)
         vol_spike  = s.get("vol_spike", False)
-        bias       = s.get("bias", "NEUTRAL")  # from indicators.py if enriched
+        bias       = s.get("bias", "NEUTRAL")
         rr         = s.get("risk_reward")
 
-        # Vol ratio: if vol_ma20 present, compute; else None
-        vol_ratio = None
-        if s.get("volume") and s.get("vol_ma20"):
-            try:
-                vol_ratio = float(s["volume"]) / float(s["vol_ma20"])
-            except Exception:
-                pass
+        # ── Long score (inject pre-computed regime) ──
+        demand_type = _infer_demand_type(sector)
 
-        long_score = rank_stock_long(
-            ticker=ticker, sector=sector, ema_signal=ema_signal,
-            zone=zone, change_pct=change_pct, bias=bias,
-            vol_spike=vol_spike, global_risk=global_risk,
-            india_bias=india_bias, risk_reward=rr,
-        )
-        long_ranked.append(long_score)
+        d2a = _sector_score(sector)
+        d2b = _demand_type_score(demand_type)
+        d3  = _technical_structure_score(ema_signal, change_pct, zone)
+        d4  = _momentum_score(bias)
+        d5  = _volume_score(vol_spike, change_pct)
+        d6  = _execution_score(ema_signal, rr)
 
+        total = d1_long + d2a + d2b + d3 + d4 + d5 + d6
+
+        if change_pct > 0.02:
+            signal = "GAP-UP WAIT"
+        elif total >= 80:
+            signal = "STRONG BUY"
+        elif total >= 65:
+            signal = "BUY"
+        elif total >= 50:
+            signal = "WATCH"
+        elif total >= 35:
+            signal = "WEAK WATCH"
+        else:
+            signal = "AVOID"
+        if d1_long == 0 and signal in _LONG_BUY_SIGNALS:
+            signal = "BLOCKED (MARKET WEAK)"
+
+        long_ranked[idx] = {
+            "ticker":      ticker,
+            "direction":   "LONG",
+            "total_score": total,
+            "signal":      signal,
+            "demand_type": demand_type or "none",
+            "breakdown": {
+                "market_regime":  d1_long,
+                "sector_demand":  d2a,
+                "demand_type":    d2b,
+                "tech_structure": d3,
+                "momentum":       d4,
+                "volume":         d5,
+                "execution":      d6,
+            },
+        }
+
+        # ── Short score (only in bearish regime) ──
         if is_bearish:
-            short_score = rank_stock_short(
-                ticker=ticker, sector=sector, ema_signal=ema_signal,
-                change_pct=change_pct, bias=bias, vol_spike=vol_spike,
-                global_risk=global_risk, india_bias=india_bias,
-            )
-            short_ranked.append(short_score)
+            d2_inv    = max(0, 15 - d2a)
+            d3s       = _bearish_structure_score(ema_signal, change_pct)
+            d4s       = _momentum_score_bearish(bias)
+            d5s_raw   = _volume_score(vol_spike, change_pct)
+            d5_inv    = max(0, 10 - d5s_raw) if change_pct < 0 else 0
+            stotal    = d1_short + d2_inv + d3s + d4s + d5_inv
+
+            if stotal >= 75:
+                ssignal = "STRONG SHORT"
+            elif stotal >= 55:
+                ssignal = "SHORT"
+            else:
+                ssignal = "AVOID SHORT"
+
+            short_ranked.append({
+                "ticker":      ticker,
+                "direction":   "SHORT",
+                "total_score": stotal,
+                "signal":      ssignal,
+                "breakdown": {
+                    "bearish_regime":    d1_short,
+                    "weak_sector":       d2_inv,
+                    "bearish_structure": d3s,
+                    "bearish_momentum":  d4s,
+                    "distribution_vol":  d5_inv,
+                },
+            })
 
     # Sort descending by total_score
     long_ranked.sort(key=lambda x: x["total_score"], reverse=True)
-    short_ranked.sort(key=lambda x: x["total_score"], reverse=True)
+    if short_ranked:
+        short_ranked.sort(key=lambda x: x["total_score"], reverse=True)
 
-    # Select top candidates per Model-3 (max 4 positions)
-    top_longs  = [r for r in long_ranked  if r["signal"] in ("STRONG BUY", "BUY")][:max_positions]
-    top_shorts = [r for r in short_ranked if r["signal"] in ("STRONG SHORT", "SHORT")][:max_positions]
+    top_longs  = [r for r in long_ranked  if r["signal"] in _LONG_BUY_SIGNALS][:max_positions]
+    top_shorts = ([r for r in short_ranked if r["signal"] in _SHORT_BUY_SIGNALS][:max_positions]
+                  if short_ranked else [])
 
     return {
         "market_regime": {
@@ -445,9 +502,5 @@ def rank_watchlist(
         "top_long_candidates":  top_longs,
         "top_short_candidates": top_shorts,
         "full_long_ranked":     long_ranked,
-        "full_short_ranked":    short_ranked,
-        "metadata": {
-            "total_stocks_evaluated": len(screener_results),
-            "model": "Stock_model.md — Institutional Short-Term Framework v1.0",
-        }
+        "full_short_ranked":    short_ranked or [],
     }
