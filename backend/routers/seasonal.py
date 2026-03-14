@@ -13,6 +13,77 @@ from services.universe_builder import (
 router = APIRouter()
 
 
+@router.get("/seasonal/market/current-month-top")
+def get_current_month_top() -> dict:
+    cache_key = "seasonal_current_month_top"
+    cached = get_cache(cache_key, 86400)
+    if cached: return cached
+
+    try:
+        from services.nse_symbols import get_all_nse_symbols
+        # Get top 200 to have a good mix
+        symbols = get_all_nse_symbols()[:200]
+        tickers = [s["ticker"] for s in symbols]
+        meta = {s["ticker"]: {"name": s["name"], "sector": s["sector"]} for s in symbols}
+
+        df = yf.download(tickers, period="10y", auto_adjust=True, progress=False, threads=True)
+        # Avoid multi-level index issues if possible
+        if isinstance(df.columns, pd.MultiIndex) and 'Close' in df.columns.levels[0]:
+            closes = df['Close']
+        else:
+            closes = df
+
+        current_month = datetime.now().month
+        current_month_name = datetime.now().strftime("%B")
+
+        results = []
+        for t in tickers:
+            try:
+                if t not in closes.columns:
+                    continue
+                c = closes[t].dropna()
+                if c.empty: continue
+
+                monthly_close = c.resample("ME").last()
+                monthly_return = monthly_close.pct_change() * 100
+                monthly_return = monthly_return.dropna()
+
+                cm_returns = monthly_return[monthly_return.index.month == current_month]
+                if len(cm_returns) < 5:
+                    continue  # need at least 5 years of data
+
+                win_rate = round(float((cm_returns > 0).mean()) * 100, 1)
+                avg_return = round(float(cm_returns.mean()), 2)
+
+                results.append({
+                    "ticker": t,
+                    "name": meta[t]["name"].replace("Limited", "").replace("LTD", "").strip(),
+                    "win_rate": win_rate,
+                    "avg_return": avg_return,
+                    "years": len(cm_returns)
+                })
+            except Exception as e:
+                pass
+        
+        results.sort(key=lambda x: (x["win_rate"], x["avg_return"]), reverse=True)
+        
+        # Partition into top performers and worst performers
+        top_performers = [r for r in results if r["win_rate"] >= 70][:20]
+        worst_performers = sorted([r for r in results if r["win_rate"] <= 30], key=lambda x: (x["win_rate"], x["avg_return"]))[:20]
+
+        res = {
+            "current_month": current_month_name,
+            "top_performers": top_performers,
+            "worst_performers": worst_performers,
+            "total_analyzed": len(results)
+        }
+        set_cache(cache_key, res)
+        return res
+    except Exception as e:
+        print(e)
+        return {}
+
+
 @router.get("/seasonal/market/previous-year/status")
 def get_universe_build_status() -> dict:
     return get_build_state()
