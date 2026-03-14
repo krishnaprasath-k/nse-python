@@ -240,7 +240,7 @@ def get_indices(period="5d"):
 
     # ── Attempt 1: yfinance batch download ──
     try:
-        batch = yf.download(tickers, period=period, progress=False, threads=True)
+        batch = yf.download(tickers, period=period, progress=False, threads=True, auto_adjust=True)
         if batch is not None and not batch.empty and isinstance(batch.columns, pd.MultiIndex):
             close_df = batch["Close"] if "Close" in batch.columns.get_level_values(0) else None
             if close_df is not None:
@@ -269,7 +269,7 @@ def get_indices(period="5d"):
         for t in missing_yf:
             try:
                 time.sleep(0.2)
-                data = yf.download(t, period=period, progress=False, multi_level_index=False)
+                data = yf.download(t, period=period, progress=False, multi_level_index=False, auto_adjust=True)
                 data = _flatten_yf_download(data, t)
                 if data is None or data.empty or 'Close' not in data.columns:
                     continue
@@ -338,7 +338,7 @@ def get_stock_history(ticker, period="2y", interval="1d"):
 
     # Method 1: Ticker.history() — returns flat columns reliably
     try:
-        data = yf.Ticker(ticker).history(period=period, interval=interval)
+        data = yf.Ticker(ticker).history(period=period, interval=interval, auto_adjust=True)
         if data is not None and not data.empty:
             data.reset_index(inplace=True)
             date_col = data.columns[0]
@@ -352,7 +352,7 @@ def get_stock_history(ticker, period="2y", interval="1d"):
 
     # Method 2: yf.download with multi_level_index=False
     try:
-        data = yf.download(ticker, period=period, interval=interval, progress=False, multi_level_index=False)
+        data = yf.download(ticker, period=period, interval=interval, progress=False, multi_level_index=False, auto_adjust=True)
         data = _flatten_yf_download(data, ticker)
         if data is not None and not data.empty:
             data.reset_index(inplace=True)
@@ -416,7 +416,7 @@ def download_multiple_tickers(tickers: list, period: str = "1mo", group_by: str 
     try:
         data = yf.download(
             tickers, period=period, group_by="ticker",
-            progress=False, threads=True
+            progress=False, threads=True, auto_adjust=True
         )
         if data is not None and not data.empty:
             for t in tickers:
@@ -445,7 +445,7 @@ def download_multiple_tickers(tickers: list, period: str = "1mo", group_by: str 
         for t in missing:
             try:
                 time.sleep(0.3)
-                df = yf.download(t, period=period, progress=False, multi_level_index=False)
+                df = yf.download(t, period=period, progress=False, multi_level_index=False, auto_adjust=True)
                 df = _flatten_yf_download(df, t)
                 if df is not None and not df.empty and 'Close' in df.columns:
                     result[t] = df

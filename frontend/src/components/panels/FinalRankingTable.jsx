@@ -105,7 +105,7 @@ export function FinalRankingTable() {
       {(!data || data.status === "building") && (
         <div className="mb-4">
           <div className="flex justify-between text-[11px] text-gray-500 mb-1">
-            <span>Calculating scores for all NSE stocks...</span>
+            <span>Calculating scores for Nifty 500 stocks...</span>
             <span>{data?.progress ?? 0}%</span>
           </div>
           <div className="w-full bg-gray-200 rounded h-1.5">

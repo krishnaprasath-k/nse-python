@@ -106,7 +106,7 @@ export function StockScreener() {
             />
           </div>
           <p className="text-[10px] text-gray-400 mt-1">
-            Downloading 3-month price data for ~1800 NSE stocks. Takes 3–5 minutes on first load.
+            Downloading 3-month price data for Nifty 500 stocks. Takes 1–2 minutes on first load.
           </p>
         </div>
       )}

@@ -63,9 +63,14 @@
     "extended_pct": 5.0
   },
   "sector_rotation": {
-    "strong_inflow_score": 3,
-    "mild_inflow_score": 1,
-    "lookback_days": 22
+    "strong_inflow_score": 5,
+    "mild_inflow_score": 2,
+    "lookback_days": 30
+  },
+  "screener": {
+    "strong_buy_threshold": 8,
+    "buy_threshold": 6,
+    "watch_threshold": 4
   },
   "seasonal": {
     "years": 10,

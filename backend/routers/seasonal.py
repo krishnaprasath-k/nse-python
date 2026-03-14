@@ -117,25 +117,31 @@ def get_seasonal_analysis(ticker: str) -> dict:
         falling_wr = s_cfg.get("falling_win_rate", 40)
         pre_buy_th = s_cfg.get("pre_result_buy_threshold", 65)
         pre_avoid_th = s_cfg.get("pre_result_avoid_threshold", 35)
+        pre_result_days = s_cfg.get("pre_result_days", 10)
 
-        # ── Part 1: Monthly Win Rate ──────────────────────────
+        # ── Fetch Data ───────────────────────────────────────────
         df = yf.download(ticker, period=f"{data_years}y", progress=False, auto_adjust=True, multi_level_index=False)
         df = _flatten_yf_download(df, ticker)
         if df is None or df.empty:
-            # Fallback: use Ticker.history()
-            df = yf.Ticker(ticker).history(period="10y")
+            df = yf.Ticker(ticker).history(period="10y", auto_adjust=True)
             if df is None or df.empty:
                 return {}
 
         df = df[["Close"]].copy()
 
-        # Monthly returns
-        monthly = df["Close"].resample("ME").agg(["first", "last"])
-        monthly["return"]     = ((monthly["last"] - monthly["first"]) / monthly["first"]) * 100
-        monthly["month_num"]  = monthly.index.month
-        monthly["month_name"] = monthly.index.strftime("%b")
-        monthly["year"]       = monthly.index.year
-        monthly["positive"]   = monthly["return"] > 0
+        # ── Part 1: Monthly Win Rate (month-end to month-end) ────
+        monthly_close = df["Close"].resample("ME").last()
+        monthly_return = monthly_close.pct_change() * 100
+        monthly_return = monthly_return.dropna()
+
+        # Build monthly DataFrame for analysis
+        monthly = pd.DataFrame({
+            "return": monthly_return,
+            "month_num": monthly_return.index.month,
+            "month_name": monthly_return.index.strftime("%b"),
+            "year": monthly_return.index.year,
+            "positive": monthly_return > 0,
+        })
 
         month_order = ["Jan","Feb","Mar","Apr","May","Jun",
                        "Jul","Aug","Sep","Oct","Nov","Dec"]
@@ -164,7 +170,7 @@ def get_seasonal_analysis(ticker: str) -> dict:
                 "is_current": m_num == datetime.now().month,
             })
 
-        # ── Part 2: Current Month Historical Detail ───────────────────────────
+        # ── Part 2: Current Month Historical Detail ──────────────
         current_month = datetime.now().month
         current_month_name = datetime.now().strftime("%B")
         current_month_rows = monthly[monthly["month_num"] == current_month]
@@ -178,7 +184,70 @@ def get_seasonal_analysis(ticker: str) -> dict:
             })
         year_by_year.sort(key=lambda x: x["year"], reverse=True)
 
-        # ── Part 3: Pre-Result Pattern ────────────────────────────────────────
+        # ── Part 3: Day-by-Day Trading Pattern ───────────────────
+        df["daily_return"] = df["Close"].pct_change() * 100
+        df["month"] = df.index.month
+        df["year"] = df.index.year
+        df["year_month"] = df.index.to_period("M")
+
+        # Number each trading day within its month (1-based)
+        df["trading_day"] = df.groupby("year_month").cumcount() + 1
+
+        max_trading_day = min(int(df["trading_day"].max()), 23)
+
+        # Current month specific daily pattern
+        cm_df = df[df["month"] == current_month]
+        current_month_daily = []
+        for day_num in range(1, max_trading_day + 1):
+            day_rows = cm_df[cm_df["trading_day"] == day_num]["daily_return"].dropna()
+            if len(day_rows) < 3:
+                continue
+            current_month_daily.append({
+                "trading_day": day_num,
+                "avg_return": round(float(day_rows.mean()), 4),
+                "win_rate": round(float((day_rows > 0).mean()) * 100, 1),
+                "sample_size": len(day_rows),
+            })
+
+        # ── Part 4: Decision Verdict ─────────────────────────────
+        cm_summary = [m for m in monthly_summary if m["is_current"]]
+        if cm_summary:
+            cm_data = cm_summary[0]
+            cm_wr = cm_data["win_rate"]
+            cm_avg = cm_data["avg_return"]
+            years_positive = sum(1 for y in year_by_year if y["result"] == "UP")
+            years_total = len(year_by_year)
+
+            if cm_wr >= rising_wr and cm_avg > 0:
+                verdict = "HISTORICALLY BULLISH"
+            elif cm_wr <= falling_wr and cm_avg < 0:
+                verdict = "HISTORICALLY BEARISH"
+            else:
+                verdict = "NO CLEAR EDGE"
+
+            confidence = f"{years_positive} out of {years_total} years, {current_month_name} was positive"
+
+            # Find best period within month
+            best_period = ""
+            if current_month_daily:
+                # Group into first half / second half
+                first_half = [d for d in current_month_daily if d["trading_day"] <= 10]
+                second_half = [d for d in current_month_daily if d["trading_day"] > 10]
+                first_avg_wr = sum(d["win_rate"] for d in first_half) / len(first_half) if first_half else 50
+                second_avg_wr = sum(d["win_rate"] for d in second_half) / len(second_half) if second_half else 50
+
+                if first_avg_wr > second_avg_wr + 5:
+                    best_period = "First half of month tends to be stronger"
+                elif second_avg_wr > first_avg_wr + 5:
+                    best_period = "Second half of month tends to be stronger"
+                else:
+                    best_period = "No significant intra-month bias"
+        else:
+            verdict = "INSUFFICIENT DATA"
+            confidence = "Not enough data for current month"
+            best_period = ""
+
+        # ── Part 5: Pre-Result Pattern ───────────────────────────
         pre_result_data = []
         try:
             t = yf.Ticker(ticker)
@@ -187,7 +256,7 @@ def get_seasonal_analysis(ticker: str) -> dict:
                 past_earnings = earnings[earnings.index < pd.Timestamp.now(tz='UTC')]
 
                 for result_date in list(past_earnings.index)[:16]:  # last 16 quarters
-                    start = result_date - pd.Timedelta(days=15)
+                    start = result_date - pd.Timedelta(days=pre_result_days)
                     end   = result_date
 
                     window = df.loc[
@@ -219,21 +288,20 @@ def get_seasonal_analysis(ticker: str) -> dict:
                                   "AVOID BEFORE RESULT"  if pre_result_win_rate <= pre_avoid_th else \
                                   "MIXED - NO CLEAR EDGE"
 
-        # ── Part 4: Weekly Pattern ────────────────────────────────────────────
+        # ── Part 6: Weekly Pattern ───────────────────────────────
         df_weekly = df.copy()
         df_weekly["dow"]     = df_weekly.index.dayofweek  # 0=Mon, 4=Fri
         df_weekly["dow_name"]= df_weekly.index.strftime("%A")
-        df_weekly["daily_ret"]= df_weekly["Close"].pct_change() * 100
 
         day_names = ["Monday","Tuesday","Wednesday","Thursday","Friday"]
         weekly_pattern = []
         for i, day in enumerate(day_names):
-            day_rows = df_weekly[df_weekly["dow"] == i]["daily_ret"].dropna()
+            day_rows = df_weekly[df_weekly["dow"] == i]["daily_return"].dropna()
             if len(day_rows) > 0:
                 weekly_pattern.append({
                     "day":        day,
-                    "avg_return": round(day_rows.mean(), 3),
-                    "win_rate":   round((day_rows > 0).mean() * 100, 1),
+                    "avg_return": round(float(day_rows.mean()), 3),
+                    "win_rate":   round(float((day_rows > 0).mean()) * 100, 1),
                 })
 
         res = {
@@ -241,6 +309,12 @@ def get_seasonal_analysis(ticker: str) -> dict:
             "monthly_pattern":     monthly_summary,
             "current_month":       current_month_name,
             "current_month_detail": year_by_year,
+            "current_month_daily": current_month_daily,
+            "verdict": {
+                "signal":     verdict,
+                "confidence": confidence,
+                "best_period": best_period,
+            },
             "pre_result_pattern":  {
                 "events":     pre_result_data[:12],
                 "win_rate":   pre_result_win_rate,

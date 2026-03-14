@@ -29,16 +29,19 @@ def get_stock_data(ticker: str):
         latest = df_ind.iloc[-1]
         
         ohlcv = []
-        for _, row in df_ind.fillna(0).iterrows():
+        for _, row in df_ind.iterrows():
             try:
+                close_val = row['Close']
+                if pd.isna(close_val):
+                    continue
                 ohlcv.append({
                     "time": str(row['Date']),
-                    "open": float(row['Open']),
-                    "high": float(row['High']),
-                    "low": float(row['Low']),
-                    "close": float(row['Close']),
-                    "volume": float(row['Volume']),
-                    "vol_spike": bool(row.get('vol_spike', False))
+                    "open": float(row['Open']) if pd.notna(row['Open']) else float(close_val),
+                    "high": float(row['High']) if pd.notna(row['High']) else float(close_val),
+                    "low": float(row['Low']) if pd.notna(row['Low']) else float(close_val),
+                    "close": float(close_val),
+                    "volume": float(row['Volume']) if pd.notna(row['Volume']) else 0,
+                    "vol_spike": bool(row.get('vol_spike', False)) if pd.notna(row.get('vol_spike')) else False,
                 })
             except:
                 pass
@@ -136,11 +139,11 @@ def get_seasonal_pattern(ticker: str, years: int = 10):
     try:
         # Use Ticker.history() which returns flat columns reliably
         t = yf.Ticker(ticker)
-        df = t.history(period=f"{years}y")
+        df = t.history(period=f"{years}y", auto_adjust=True)
         
         if df.empty:
             # Fallback: try yf.download with multi_level_index=False
-            df = yf.download(ticker, period=f"{years}y", progress=False, multi_level_index=False)
+            df = yf.download(ticker, period=f"{years}y", progress=False, multi_level_index=False, auto_adjust=True)
             df = _flatten_yf_download(df, ticker)
         
         if df is None or df.empty:
@@ -159,12 +162,16 @@ def get_seasonal_pattern(ticker: str, years: int = 10):
         # Use the index for resampling
         close_series = df.set_index(df.columns[0])["Close"] if "Date" in df.columns or "Datetime" in df.columns else df["Close"]
         
-        # Monthly returns
-        monthly = close_series.resample("ME").agg(["first", "last"])
-        monthly["return"]   = (monthly["last"] - monthly["first"]) / monthly["first"] * 100
-        monthly["month"]    = monthly.index.month
-        monthly["month_name"] = monthly.index.strftime("%b")
-        monthly["positive"] = monthly["return"] > 0
+        # Monthly returns (month-end to month-end, matching TradingView)
+        monthly_close = close_series.resample("ME").last()
+        monthly_return = monthly_close.pct_change() * 100
+        monthly_return = monthly_return.dropna()
+        monthly = pd.DataFrame({
+            "return": monthly_return,
+            "month": monthly_return.index.month,
+            "month_name": monthly_return.index.strftime("%b"),
+            "positive": monthly_return > 0,
+        })
 
         summary = monthly.groupby("month_name").agg(
             avg_return  = ("return",   "mean"),
@@ -215,7 +222,7 @@ def get_correlation(ticker: str, period: str = "1y"):
         all_tickers = [ticker] + list(peers.values())
         
         # Use download with multi_level_index=False for simpler handling
-        raw = yf.download(all_tickers, period=period, progress=False)
+        raw = yf.download(all_tickers, period=period, progress=False, auto_adjust=True)
         
         if raw is None or raw.empty:
             return []

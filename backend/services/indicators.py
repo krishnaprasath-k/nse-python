@@ -49,9 +49,23 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['vol_ma20']   = df['Volume'].rolling(vol_avg_period).mean()
     df['vol_spike']  = df['Volume'] > (vol_spike_mult * df['vol_ma20'])
 
+    # Magnitude-weighted momentum: use actual returns, not just sign
+    def _momentum_bucket(ret):
+        """Convert return to magnitude-based score."""
+        if abs(ret) < 0.005:  # < 0.5%
+            return 0
+        elif ret > 0.03:     # > 3%
+            return 2
+        elif ret > 0:
+            return 1
+        elif ret < -0.03:    # < -3%
+            return -2
+        else:
+            return -1
+
     df['momentum_score'] = (
-        np.sign(df['return_1d']) * weight_1d +
-        np.sign(df['return_20d']) * weight_20d
+        df['return_1d'].apply(_momentum_bucket) * weight_1d +
+        df['return_20d'].apply(_momentum_bucket) * weight_20d
     )
     df['bias'] = df['momentum_score'].apply(
         lambda x: 'STRONG BULLISH' if x >= mom_bullish

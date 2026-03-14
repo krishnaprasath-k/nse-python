@@ -54,7 +54,30 @@ def _ema(prices: list, period: int = 21) -> float | None:
     return v
 
 
-def _score_stock(ticker: str, name: str, sector: str, closes: list, cfg: dict) -> dict | None:
+def _compute_seasonal_score(closes: list) -> int:
+    """
+    Estimate seasonal favorability from recent price data.
+    Uses current month's trend as a proxy.
+    """
+    if len(closes) < 22:
+        return 1  # default neutral
+    current_chunk = closes[-15:]
+    if current_chunk[0] == 0:
+        return 1
+
+    current_ret = (current_chunk[-1] - current_chunk[0]) / current_chunk[0]
+
+    if current_ret > 0.02:
+        return 2
+    elif current_ret > -0.02:
+        return 1
+    else:
+        return 0
+
+
+def _score_stock(ticker: str, name: str, sector: str, closes: list, cfg: dict,
+                 global_risk: str = "NEUTRAL", india_bias: str = "RANGE",
+                 sector_scores: dict = None) -> dict | None:
     if len(closes) < 5:
         return None
 
@@ -100,19 +123,41 @@ def _score_stock(ticker: str, name: str, sector: str, closes: list, cfg: dict) -
         1 if is_near else 0,
     ])
 
+    # Real probability scores from live market data
+    macro_score = {"RISK ON": 2, "NEUTRAL": 1, "RISK OFF": 0}.get(global_risk, 1)
+
+    sector_score = 0
+    if sector_scores and sector in sector_scores:
+        ms = sector_scores[sector]
+        sr_cfg = cfg.get("sector_rotation", {})
+        strong_th = sr_cfg.get("strong_inflow_score", 5)
+        mild_th = sr_cfg.get("mild_inflow_score", 2)
+        if ms >= strong_th:
+            sector_score = 2
+        elif ms >= mild_th:
+            sector_score = 1
+
+    seasonal_score = _compute_seasonal_score(closes)
+
     prob = {
-        "macro": 1,
-        "sector": 1,
+        "macro": macro_score,
+        "sector": sector_score,
         "event": 0,
-        "seasonal": 1,
+        "seasonal": seasonal_score,
         "statistical": 2 if sig == "BEST TIMING" else 1 if sig == "NEAR EMA" else 0,
         "technical": min(score, 2),
     }
     final_score = sum(prob.values())
+
+    scr_cfg = cfg.get("screener", {})
+    strong_buy_th = scr_cfg.get("strong_buy_threshold", 8)
+    buy_th = scr_cfg.get("buy_threshold", 6)
+    watch_th = scr_cfg.get("watch_threshold", 4)
+
     final_signal = (
-        "STRONG BUY" if final_score >= 9 else
-        "BUY" if final_score >= 7 else
-        "WATCH" if final_score >= 5 else
+        "STRONG BUY" if final_score >= strong_buy_th else
+        "BUY" if final_score >= buy_th else
+        "WATCH" if final_score >= watch_th else
         "AVOID"
     )
 
@@ -151,6 +196,27 @@ def build_screener():
         meta = {s["ticker"]: s for s in symbols}
         _update(total=len(tickers))
 
+        # Fetch real market context for probability scoring
+        global_risk = "NEUTRAL"
+        india_bias = "RANGE"
+        sector_scores = {}
+
+        try:
+            from routers.market import get_market_data
+            market_data = get_market_data()
+            global_risk = market_data.get("global_risk", "NEUTRAL")
+            india_bias = market_data.get("india_bias", "RANGE")
+        except Exception as e:
+            print(f"[screener_builder] Market data fetch failed: {e}")
+
+        try:
+            from routers.sector_rotation import get_sector_rotation
+            sr_data = get_sector_rotation()
+            for s in sr_data.get("sectors", []):
+                sector_scores[s["sector"]] = s["momentum_score"]
+        except Exception as e:
+            print(f"[screener_builder] Sector rotation fetch failed: {e}")
+
         results = []
         batches = [tickers[i:i + BATCH_SIZE] for i in range(0, len(tickers), BATCH_SIZE)]
 
@@ -173,7 +239,10 @@ def build_screener():
 
                         closes = [_safe(v) for v in closes_s.tolist()]
                         m = meta.get(t, {})
-                        row = _score_stock(t, m.get("name", t), m.get("sector", "Unknown"), closes, cfg)
+                        row = _score_stock(
+                            t, m.get("name", t), m.get("sector", "Unknown"),
+                            closes, cfg, global_risk, india_bias, sector_scores
+                        )
                         if row:
                             results.append(row)
                     except Exception:
