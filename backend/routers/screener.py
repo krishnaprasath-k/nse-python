@@ -5,6 +5,7 @@ from services.screener_builder import (
     get_screener_state, trigger_if_needed,
     SCREENER_CACHE_KEY, SCREENER_CACHE_TTL,
 )
+from services.probability_ranking import rank_watchlist
 
 router = APIRouter()
 
@@ -97,3 +98,119 @@ def get_screener(
             "best_timing_count": best_timing,
         },
     }
+
+
+@router.get("/screener/ranked")
+def get_ranked(
+    top: int = Query(15, ge=1, le=50),
+) -> dict:
+    """
+    Returns top BUY and top SELL candidates side by side using the full
+    Model-1→4 probability ranking system (probability_ranking.py).
+    """
+    full = get_cache(SCREENER_CACHE_KEY, SCREENER_CACHE_TTL)
+    if full is None:
+        trigger_if_needed()
+        state = get_screener_state()
+        return {
+            "status": state["status"] if state["status"] == "building" else "building",
+            "progress": state["progress"],
+            "buy": [],
+            "sell": [],
+            "market": {},
+        }
+
+    # Fetch live market regime
+    global_risk = "NEUTRAL"
+    india_bias  = "RANGE"
+    try:
+        from routers.market import get_market_data
+        md = get_market_data()
+        global_risk = md.get("global_risk", "NEUTRAL")
+        india_bias  = md.get("india_bias",  "RANGE")
+    except Exception:
+        pass
+
+    ranked = rank_watchlist(
+        screener_results=list(full),
+        global_risk=global_risk,
+        india_bias=india_bias,
+        max_positions=top,
+    )
+
+    # Build lean buy list
+    buy_list = [
+        {
+            "rank":          i + 1,
+            "ticker":        r["ticker"],
+            "total_score":   r["total_score"],
+            "signal":        r["signal"],
+            "demand_type":   r.get("demand_type", "-"),
+            "breakdown":     r["breakdown"],
+            # Enrich from raw screener data
+            **_enrich(r["ticker"], full),
+        }
+        for i, r in enumerate(ranked["full_long_ranked"][:top])
+    ]
+
+    sell_list = [
+        {
+            "rank":        i + 1,
+            "ticker":      r["ticker"],
+            "total_score": r["total_score"],
+            "signal":      r["signal"],
+            "breakdown":   r["breakdown"],
+            **_enrich(r["ticker"], full),
+        }
+        for i, r in enumerate(ranked["full_short_ranked"][:top])
+    ] if ranked["full_short_ranked"] else _build_sell_from_screener(full, top)
+
+    return {
+        "status":  "ready",
+        "buy":     buy_list,
+        "sell":    sell_list,
+        "market": {
+            "global_risk": global_risk,
+            "india_bias":  india_bias,
+            "is_bearish":  ranked["market_regime"]["is_bearish"],
+        },
+    }
+
+
+def _enrich(ticker: str, full: list) -> dict:
+    """Pull price/sector/ema data from raw screener cache for a ticker."""
+    for s in full:
+        if s.get("ticker") == ticker:
+            return {
+                "name":       s.get("name", ticker),
+                "sector":     s.get("sector", "-"),
+                "price":      s.get("price"),
+                "change_pct": s.get("change_pct", 0),
+                "ema_signal": s.get("ema_signal", "-"),
+                "zone":       s.get("zone", "-"),
+            }
+    return {"name": ticker, "sector": "-", "price": None, "change_pct": 0, "ema_signal": "-", "zone": "-"}
+
+
+def _build_sell_from_screener(full: list, top: int) -> list:
+    """
+    Fallback: when market isn't bearish, derive sell candidates as the
+    lowest-scoring stocks (potential weakness / avoid).
+    """
+    sorted_weak = sorted(full, key=lambda x: x.get("final_score", 0))
+    result = []
+    for i, s in enumerate(sorted_weak[:top]):
+        result.append({
+            "rank":        i + 1,
+            "ticker":      s["ticker"],
+            "total_score": s.get("final_score", 0),
+            "signal":      s.get("final_signal", "AVOID"),
+            "name":        s.get("name", s["ticker"]),
+            "sector":      s.get("sector", "-"),
+            "price":       s.get("price"),
+            "change_pct":  s.get("change_pct", 0),
+            "ema_signal":  s.get("ema_signal", "-"),
+            "zone":        s.get("zone", "-"),
+            "breakdown":   {},
+        })
+    return result
