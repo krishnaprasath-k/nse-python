@@ -163,7 +163,7 @@ def get_ranked(
     buy_list  = _build_list(ranked["full_long_ranked"][:max_top],  index, include_demand=True)
     sell_list = (_build_list(ranked["full_short_ranked"][:max_top], index)
                  if ranked["full_short_ranked"]
-                 else _build_sell_from_screener(full, max_top))
+                 else _build_list(list(reversed(ranked["full_long_ranked"]))[:max_top], index))
 
     market_info = {
         "global_risk": global_risk,
@@ -207,23 +207,3 @@ def _build_list(ranked_items: list, index: dict, include_demand: bool = False) -
         result.append(entry)
     return result
 
-
-def _build_sell_from_screener(full: list, top: int) -> list:
-    """Fallback sell list from weakest-scoring stocks when market isn't bearish."""
-    sorted_weak = sorted(full, key=lambda x: x.get("final_score", 0))[:top]
-    return [
-        {
-            "rank":        i + 1,
-            "ticker":      s["ticker"],
-            "total_score": s.get("final_score", 0),
-            "signal":      s.get("final_signal", "AVOID"),
-            "name":        s.get("name", s["ticker"]),
-            "sector":      s.get("sector", "-"),
-            "price":       s.get("price"),
-            "change_pct":  s.get("change_pct", 0),
-            "ema_signal":  s.get("ema_signal", "-"),
-            "zone":        s.get("zone", "-"),
-            "breakdown":   {},
-        }
-        for i, s in enumerate(sorted_weak)
-    ]
