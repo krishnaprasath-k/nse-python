@@ -67,7 +67,8 @@ function EmaBadge({ signal }) {
 }
 
 /* ─── Breakdown tooltip ──────────────────────────────────────── */
-function BreakdownTooltip({ breakdown = {}, isSell = false }) {
+function BreakdownTooltip({ breakdown = {}, direction = "LONG" }) {
+  const isSell = direction === "SHORT";
   const keys = isSell
     ? [
         "bearish_regime",
@@ -177,7 +178,7 @@ function StockRow({ s, rank, isSell, signalMap }) {
               className="fixed inset-0 z-10"
               onClick={() => setShowBreakdown(false)}
             />
-            <BreakdownTooltip breakdown={s.breakdown} isSell={isSell} />
+            <BreakdownTooltip breakdown={s.breakdown} direction={s.direction ?? (isSell ? "SHORT" : "LONG")} />
           </>
         )}
       </td>

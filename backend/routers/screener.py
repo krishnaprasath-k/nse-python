@@ -200,6 +200,7 @@ def _build_list(ranked_items: list, index: dict, include_demand: bool = False) -
             "total_score": r["total_score"],
             "signal":      r["signal"],
             "breakdown":   r["breakdown"],
+            "direction":   r.get("direction", "LONG"),
             **enriched,
         }
         if include_demand:
