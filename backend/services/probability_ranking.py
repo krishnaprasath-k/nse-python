@@ -412,12 +412,14 @@ def rank_watchlist(
 
         # ── Long score (inject pre-computed regime) ──
         demand_type = _infer_demand_type(sector)
+        rsi        = s.get("rsi")
+        vol_ratio  = s.get("vol_ratio")
 
         d2a = _sector_score(sector)
         d2b = _demand_type_score(demand_type)
         d3  = _technical_structure_score(ema_signal, change_pct, zone)
-        d4  = _momentum_score(bias)
-        d5  = _volume_score(vol_spike, change_pct)
+        d4  = _momentum_score(bias, rsi)
+        d5  = _volume_score(vol_spike, change_pct, vol_ratio)
         d6  = _execution_score(ema_signal, rr)
 
         total = d1_long + d2a + d2b + d3 + d4 + d5 + d6
@@ -458,8 +460,8 @@ def rank_watchlist(
         if is_bearish:
             d2_inv    = max(0, 15 - d2a)
             d3s       = _bearish_structure_score(ema_signal, change_pct)
-            d4s       = _momentum_score_bearish(bias)
-            d5s_raw   = _volume_score(vol_spike, change_pct)
+            d4s       = _momentum_score_bearish(bias, rsi)
+            d5s_raw   = _volume_score(vol_spike, change_pct, vol_ratio)
             d5_inv    = max(0, 10 - d5s_raw) if change_pct < 0 else 0
             stotal    = d1_short + d2_inv + d3s + d4s + d5_inv
 

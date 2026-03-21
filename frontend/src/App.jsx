@@ -8,6 +8,7 @@ import { ContractTracker } from "./components/panels/ContractTracker";
 import { SectorRotation } from "./components/panels/SectorRotation";
 import { SeasonalModule } from "./components/panels/SeasonalModule";
 import { FinalRankingTable } from "./components/panels/FinalRankingTable";
+import { PatternAnalyzer } from "./components/panels/PatternAnalyzer";
 
 const API_BASE = "/api";
 
@@ -182,6 +183,9 @@ export default function App() {
 
             {/* Probability Ranking Table */}
             <FinalRankingTable />
+
+            {/* Pattern Analyzer */}
+            <PatternAnalyzer />
           </>
         )}
       </div>

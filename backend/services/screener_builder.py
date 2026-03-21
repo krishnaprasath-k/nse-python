@@ -54,6 +54,22 @@ def _ema(prices: list, period: int = 21) -> float | None:
     return v
 
 
+def _rsi(closes: list, period: int = 14) -> float | None:
+    if len(closes) < period + 1:
+        return None
+    gains, losses = [], []
+    for i in range(1, len(closes)):
+        d = closes[i] - closes[i - 1]
+        gains.append(max(d, 0.0))
+        losses.append(max(-d, 0.0))
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 2)
+
+
 def _compute_seasonal_score(closes: list) -> int:
     """
     Estimate seasonal favorability from recent price data.
@@ -75,7 +91,7 @@ def _compute_seasonal_score(closes: list) -> int:
         return 0
 
 
-def _score_stock(ticker: str, name: str, sector: str, closes: list, cfg: dict,
+def _score_stock(ticker: str, name: str, sector: str, closes: list, volumes: list, cfg: dict,
                  global_risk: str = "NEUTRAL", india_bias: str = "RANGE",
                  sector_scores: dict = None) -> dict | None:
     if len(closes) < 5:
@@ -161,6 +177,26 @@ def _score_stock(ticker: str, name: str, sector: str, closes: list, cfg: dict,
         "AVOID"
     )
 
+    # ── Fields required by probability_ranking.rank_watchlist ──
+    rsi_val = _rsi(closes, 14)
+    if volumes and len(volumes) >= 20:
+        avg_vol = sum(volumes[-20:]) / 20
+        vol_ratio = round(volumes[-1] / avg_vol, 2) if avg_vol > 0 else 1.0
+        vol_spike = vol_ratio >= 1.5
+    else:
+        vol_ratio = None
+        vol_spike = False
+
+    if rsi_val is not None:
+        if rsi_val >= 60:
+            bias = "STRONG BULLISH"
+        elif rsi_val <= 40:
+            bias = "STRONG BEARISH"
+        else:
+            bias = "NEUTRAL"
+    else:
+        bias = "NEUTRAL"
+
     return {
         "ticker": ticker,
         "name": name,
@@ -176,6 +212,11 @@ def _score_stock(ticker: str, name: str, sector: str, closes: list, cfg: dict,
         "probability_scores": prob,
         "final_score": final_score,
         "final_signal": final_signal,
+        # Fields consumed by probability_ranking.rank_watchlist
+        "rsi": rsi_val,
+        "vol_ratio": vol_ratio,
+        "vol_spike": vol_spike,
+        "bias": bias,
     }
 
 
@@ -231,8 +272,18 @@ def build_screener():
                             if t not in raw["Close"].columns:
                                 continue
                             closes_s = raw["Close"][t].dropna()
+                            try:
+                                vol_s = raw["Volume"][t].reindex(closes_s.index).fillna(0)
+                                volumes = [_safe(v) for v in vol_s.tolist()]
+                            except Exception:
+                                volumes = []
                         else:
                             closes_s = raw["Close"].dropna() if len(batch) == 1 else pd.Series(dtype=float)
+                            try:
+                                vol_s = raw["Volume"].reindex(closes_s.index).fillna(0)
+                                volumes = [_safe(v) for v in vol_s.tolist()]
+                            except Exception:
+                                volumes = []
 
                         if closes_s.empty or len(closes_s) < 5:
                             continue
@@ -241,7 +292,7 @@ def build_screener():
                         m = meta.get(t, {})
                         row = _score_stock(
                             t, m.get("name", t), m.get("sector", "Unknown"),
-                            closes, cfg, global_risk, india_bias, sector_scores
+                            closes, volumes, cfg, global_risk, india_bias, sector_scores
                         )
                         if row:
                             results.append(row)
